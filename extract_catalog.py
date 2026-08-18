@@ -342,7 +342,8 @@ OCR Text from Page {page_num}:
             for var in variants:
                 if not isinstance(var, dict):
                     continue
-                var_clean = dict(var)
+                var_clean = {k: v for k, v in var.items() if v and str(v).lower() not in ["not specified", "null", "none", "n/a", "color"]}
+                var_clean.pop("color", None)
                 
                 # Normalize size attribute in variant
                 if "size" in var_clean:
@@ -350,13 +351,14 @@ OCR Text from Page {page_num}:
                     if sz_norm:
                         var_clean["size"] = sz_norm[0]
                         
+                sku = var_clean.pop("cat_no", None)
+                sku_tag = f" [{sku}]" if sku else ""
                 size_label = f" (Size {var_clean['size']})" if "size" in var_clean else ""
-                color_label = f" - {var_clean['color']}" if "color" in var_clean else ""
                 
                 obs_doc = {
                     "klass_name": k_name,
-                    "product_name": f"{base_name}{size_label}{color_label}",
-                    "cat_no": var_clean.pop("cat_no", None),
+                    "product_name": f"{base_name}{sku_tag}{size_label}",
+                    "cat_no": sku,
                     "description": desc,
                     "materials": mats,
                     "compliance_flags": comp,
@@ -364,6 +366,15 @@ OCR Text from Page {page_num}:
                 }
                 atomic_observations.append(obs_doc)
                 
+        # Sort variants deterministically: by Klass, then natural size rank, then SKU
+        def size_rank(doc):
+            sz = str(doc.get("attributes", {}).get("size", ""))
+            order = ["000#", "00#", "0#", "1#", "2#", "3#", "4#", "5#", "6#", "XS", "S", "M", "L", "XL", "XXL"]
+            if sz in order:
+                return order.index(sz)
+            return 99
+            
+        atomic_observations.sort(key=lambda d: (d.get("klass_name", ""), d.get("cat_no") or "", size_rank(d)))
         return atomic_observations
     except Exception as e:
         print(f"  [!] Extraction error on page {page_num}: {e}")
