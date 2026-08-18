@@ -5,8 +5,9 @@ env/
 __pycache__/
 *.pyc
 
-# Large raw PDF files & image caches
+# Large raw PDF files & image caches (except starter catalog)
 *.pdf
+!foyomed catalogue.pdf
 assets/catalog_pages/
 extracted_products.json
 
