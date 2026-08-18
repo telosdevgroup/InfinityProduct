@@ -193,8 +193,27 @@ OCR Text:
             comp = prod.get("compliance_flags", {})
             desc = prod.get("description", "")
             
+            # Check for shared family sizes (e.g. "L, M, S, XS")
+            family_sizes = normalize_sizes(prod.get("sizes", prod.get("attributes", {}).get("sizes", [])))
             variants = prod.get("variants", [])
-            if not variants:
+            
+            # If variants exist AND family sizes exist, perform Cartesian explosion
+            if variants and family_sizes:
+                exploded_vars = []
+                for var in variants:
+                    if not isinstance(var, dict):
+                        continue
+                    if "size" in var and var["size"]:
+                        exploded_vars.append(var)
+                    else:
+                        for s in family_sizes:
+                            v_copy = dict(var)
+                            v_copy["size"] = s
+                            exploded_vars.append(v_copy)
+                variants = exploded_vars
+            elif not variants and family_sizes:
+                variants = [{"size": s} for s in family_sizes]
+            elif not variants:
                 variants = [prod.get("attributes", {})]
                 
             for var in variants:
