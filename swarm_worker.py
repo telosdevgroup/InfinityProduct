@@ -120,7 +120,7 @@ def extract_products_from_image(image_data, spread_num):
         return []
         
     text = "\n".join([line[1] for line in ocr_res])
-    if len(text.strip()) < 30:
+    if len(text.strip()) < 60:
         return []
         
     prompt = f"""You are an expert medical device catalog extraction engine.
@@ -282,20 +282,18 @@ def worker_loop():
                 
             task_id = job["task_id"]
             data = job["data"]
-            print(f"\n⚡ [Work Claimed] Task: {task_id} | Spread {data['spread_num']} ({data['side']})")
+            print(f"\n⚡ Processing: {task_id}")
             
             t0 = time.time()
             img_payload = data.get("image_b64") or data.get("image_path")
             extracted_products = extract_products_from_image(img_payload, data["spread_num"])
             dur = time.time() - t0
             
-            print(f"   ↳ Extracted {len(extracted_products)} products in {dur:.2f}s:")
+            print(f"   ↳ Extracted {len(extracted_products)} products ({dur:.1f}s)")
             for p in extracted_products:
-                mats = ", ".join(p.get("materials", [])) or "N/A"
-                attrs = p.get("attributes", {})
-                attr_str = " | ".join([f"{k.replace('_', ' ').title()}: {v}" for k, v in attrs.items()]) if attrs else "None"
-                print(f"       • 📦 [{p.get('klass_name')}] {p.get('product_name')}")
-                print(f"            ↳ Materials: {mats} | Attributes: {attr_str}")
+                k = p.get('klass_name')
+                name = p.get('product_name')
+                print(f"       • 📦 [{k}] {name}")
                 
             submit_resp = requests.post(
                 f"{SERVER_PRIME_URL}/api/submit-work",
