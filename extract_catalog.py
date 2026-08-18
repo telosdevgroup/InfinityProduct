@@ -235,50 +235,47 @@ def extract_facets_with_granite(page_text, page_num):
     prompt = f"""You are an expert medical catalog data extraction engine.
 Analyze the raw OCR text from page {page_num} of a medical & surgical consumables catalog.
 
-MISSION: Extract EVERY distinct product family and item block on the page!
-A single page typically contains 2 to 5 completely different product sections (e.g. Anesthesia Mask at the top, Endoscope Mask in the middle, and CPAP Mask at the bottom).
-You MUST extract ALL of them into the "products" list. Do NOT stop after the first product!
+MISSION: Extract EVERY distinct product model series on the page as its OWN product entry in "products".
+A single page typically contains 3 to 5 separate product families (for example, a page may show 4 different mask models: e.g. LB3011, LB3012, LB3021, and LB3030).
+DO NOT FUSE DIFFERENT MODEL SERIES TOGETHER! Each distinct Catalog Number prefix / heading is its OWN product!
 
 CRITICAL RULES:
-1. EXTRACT ALL PRODUCT FAMILIES: Look across the ENTIRE page from top to bottom and create a product entry for EACH distinct device or supply mentioned.
-2. EXTRACT VARIANTS TABLE: For each product family, put all its catalog numbers, sizes, and specs into its 'variants' list.
-3. IGNORE SIDEBAR MARGIN TABS: Ignore vertical margin navigation tabs like "Wound Dressing", "Urology", "Others".
+1. SEPARATE PRODUCT HEADINGS: Each distinct model code (e.g. LB3011 PVC Free Mask vs LB3012 Upright Valve Mask vs LB3021 Soft Anesthesia Mask [PVC] vs LB3030 Silicone Mask [Silicone]) MUST be its OWN object in the "products" list.
+2. ACCURATE MATERIALS PER MODEL: Match the materials to that specific model (e.g. LB3021 is Medical Grade PVC, whereas LB3030 is 100% Silicone).
+3. ATOMIC VARIANTS: Put all sizes/SKUs matching that specific model into its 'variants' list.
+4. IGNORE SIDEBAR MARGIN TABS: Ignore vertical margin navigation tabs like "Wound Dressing", "Urology", "Others".
 
 Output JSON format:
 {{
   "products": [
     {{
       "klass_name": "Anesthesia Face Mask",
-      "product_name": "Silicone Anesthesia Mask",
-      "materials": ["Silicone", "Polycarbonate (PC)"],
+      "product_name": "PVC Free Anesthesia Mask",
+      "materials": ["TPE (Thermoplastic Elastomer)", "Polypropylene (PP)"],
+      "compliance_flags": {{"latex_free": true, "sterile": false}},
+      "variants": [
+        {{"cat_no": "LB301100", "size": "0#", "connector": "15mmOD"}},
+        {{"cat_no": "LB301102", "size": "2#", "connector": "22mmID"}}
+      ]
+    }},
+    {{
+      "klass_name": "Anesthesia Face Mask",
+      "product_name": "Soft Anesthesia Mask",
+      "materials": ["Medical Grade PVC"],
+      "compliance_flags": {{"latex_free": true, "sterile": false}},
+      "variants": [
+        {{"cat_no": "LB302101", "size": "0#", "connector": "15mmOD"}},
+        {{"cat_no": "LB302103", "size": "2#", "connector": "22mmID"}}
+      ]
+    }},
+    {{
+      "klass_name": "Anesthesia Face Mask",
+      "product_name": "Silicone Anesthesia Mask (One-Piece)",
+      "materials": ["Silicone"],
       "compliance_flags": {{"latex_free": true, "autoclavable": true}},
       "variants": [
-        {{"cat_no": "LB303101", "size": "1#", "connector": "15mmOD"}},
-        {{"cat_no": "LB303203", "size": "3#", "connector": "22mmID"}}
-      ]
-    }},
-    {{
-      "klass_name": "Endoscope Mask",
-      "product_name": "Endoscope Mask",
-      "cat_no": "LB3035",
-      "materials": ["Silicone"],
-      "compliance_flags": {{"latex_free": true}},
-      "variants": [
-        {{"size": "3#", "hole_diameter": "10mm"}},
-        {{"size": "4#", "hole_diameter": "12mm"}},
-        {{"size": "5#", "hole_diameter": "10mm, 12mm"}}
-      ]
-    }},
-    {{
-      "klass_name": "CPAP Mask",
-      "product_name": "Silicone CPAP Mask and Headgear",
-      "cat_no": "LB3041",
-      "materials": ["Silicone"],
-      "compliance_flags": {{"latex_free": true}},
-      "variants": [
-        {{"size": "S"}},
-        {{"size": "M"}},
-        {{"size": "L"}}
+        {{"cat_no": "LB303000", "size": "0#", "connector": "15mmOD"}},
+        {{"cat_no": "LB303002", "size": "2#", "connector": "15mmOD"}}
       ]
     }}
   ]
