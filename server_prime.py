@@ -76,10 +76,8 @@ def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int =
     total_spreads = len(doc)
     os.makedirs("assets/catalog_pages", exist_ok=True)
     
-    enqueued_count = 0
-    skipped_count = 0
     now = datetime.datetime.now(datetime.timezone.utc)
-    
+    enqueued_count = 0
     for sheet_idx in range(start_spread - 1, min(end_spread, total_spreads)):
         spread_num = sheet_idx + 1
         page = doc[sheet_idx]
@@ -93,15 +91,6 @@ def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int =
             task_id = f"spread_{spread_num:02d}_{side_name}"
             img_rel_path = f"assets/catalog_pages/{task_id}.jpg"
             side_img.save(img_rel_path)
-            
-            # Fast OCR check: discard splash/blank pages with < 60 characters
-            img_np = np.array(side_img)
-            ocr_res, _ = ocr(img_np)
-            ocr_text = "\n".join([line[1] for line in ocr_res]) if ocr_res else ""
-            
-            if len(ocr_text.strip()) < 60:
-                skipped_count += 1
-                continue
             
             task_doc = {
                 "task_id": task_id,
@@ -120,13 +109,8 @@ def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int =
             )
             enqueued_count += 1
             
-    print(f"📦 Enqueue Complete: {enqueued_count} product pages queued, {skipped_count} blank/splash pages discarded.")
-    return {
-        "enqueued_tasks": enqueued_count,
-        "skipped_blank_or_splash_tasks": skipped_count,
-        "start_spread": start_spread,
-        "end_spread": end_spread
-    }
+    print(f"📦 Enqueue Complete: {enqueued_count} page tasks enqueued.")
+    return {"enqueued_tasks": enqueued_count, "start_spread": start_spread, "end_spread": end_spread}
 
 @app.get("/api/get-work")
 def get_work(worker: str = "anonymous_worker"):

@@ -8,10 +8,25 @@ import requests
 import numpy as np
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
+import argparse
 
-SERVER_PRIME_URL = os.getenv("SERVER_PRIME_URL", "http://localhost:8371")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-MODEL_NAME = os.getenv("MODEL_NAME", "granite4.1:8b")
+parser = argparse.ArgumentParser(description="Infinity Product Swarm Worker")
+parser.add_argument("--server", default=os.getenv("SERVER_PRIME_URL", "http://192.168.1.213:8371"), help="Server Prime URL")
+parser.add_argument("--mongo_url", default=os.getenv("MONGO_URI", "192.168.1.213"), help="Mongo / Server Prime Host IP")
+parser.add_argument("--ollama", default=os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate"), help="Local Ollama URL")
+parser.add_argument("--model", default=os.getenv("MODEL_NAME", "granite4.1:8b"), help="Ollama model name")
+args, _ = parser.parse_known_args()
+
+# Normalize server URL if user passes IP or raw host via --mongo_url / --server
+server_host = args.mongo_url if args.mongo_url != "192.168.1.213" or "--server" not in sys.argv else args.server
+if not server_host.startswith("http"):
+    server_host = f"http://{server_host}:8371"
+elif ":" not in server_host.split("//")[-1]:
+    server_host = f"{server_host}:8371"
+
+SERVER_PRIME_URL = server_host if "--server" in sys.argv or "--mongo_url" in sys.argv else args.server
+OLLAMA_URL = args.ollama
+MODEL_NAME = args.model
 WORKER_NAME = f"worker-{socket.gethostname()}-{os.getpid()}"
 
 ocr = RapidOCR()
@@ -124,34 +139,36 @@ def extract_products_from_image(image_data, spread_num):
         return []
         
     prompt = f"""You are an expert medical device catalog extraction engine.
-Extract EVERY product model series from this catalog page OCR text into clean structured JSON.
+Extract EVERY distinct product model block on this page into clean structured JSON.
 
 CRITICAL RULES:
-1. klass_name: Choose the ordinary generic product type that would remain if all configuration choices were removed (e.g. 'Foley Catheter', 'Endotracheal Tube', 'Tracheostomy Tube', 'Anesthesia Mask', 'Laryngeal Mask', 'Suction Catheter', 'Urethral Catheter', 'Urine Drainage Bag', 'Spinal Needle', 'Infusion Set').
-   - DO NOT include configuration adjectives in klass_name (e.g. do NOT output '3-Way Latex Foley Catheter', 'Oral Preformed Endotracheal Tube', 'Disposable PVC Laryngeal Mask' as klass_name).
-   - DO NOT over-generalize beyond the recognized product type (e.g. output 'Endobronchial Tube', NOT 'Tube').
-2. raw_product_name: Preserve the manufacturer's complete original name verbatim (e.g. '3-Way Latex Foley Catheter', 'Oral Preformed Endotracheal Tube').
-3. facet_bag: Extract EVERY meaningful qualifier removed from the name or stated in descriptions (e.g. ways, route, form, tip_style, construction, cuff, materials, compliance, balloon_capacity, connectors, etc.). Free-form discovered keys are expected.
-4. variants: List individual SKU entries with their SKU-specific facets (e.g. size, gauge, length, balloon_capacity).
+1. STRICT PRODUCT BLOCK ISOLATION:
+   - Each model number heading / Cat.No table prefix (e.g. 'LB3011', 'LB3012', 'LB3021', 'LB3030') defines a SEPARATE, INDEPENDENT product block.
+   - NEVER merge SKUs, names, or materials from one model block into another (e.g. LB3011 is PVC Anesthesia Mask; LB3012 is PVC Free Mask; LB3021 is Soft Mask; LB3030 is Silicone Mask. Do NOT mix them).
+2. klass_name: Choose the ordinary generic product type that would remain if all configuration choices were removed (e.g. 'Anesthesia Mask', 'Foley Catheter', 'Endotracheal Tube', 'Tracheostomy Tube', 'Laryngeal Mask', 'Nebulizer Mask', 'Suction Catheter').
+   - DO NOT include configuration adjectives in klass_name (e.g. output 'Anesthesia Mask', NOT 'PVC Free Anesthesia Mask' or 'Silicone Anesthesia Mask').
+   - DO NOT over-generalize (e.g. output 'Endobronchial Tube', NOT 'Tube').
+3. raw_product_name: Preserve the manufacturer's complete original heading verbatim for THAT SPECIFIC model block (e.g. 'LB3012 PVC Free Anesthesia Mask', 'LB3030 Silicone Anesthesia Mask (One-piece)').
+4. facet_bag: Extract EVERY meaningful qualifier stated in that model's text (material, ways, valve, reusable/disposable, cuff, connector, etc.).
+5. variants: List individual SKU entries belonging ONLY to that model's table with their SKU-specific facets (size, gauge, cat_no, connector).
 
 JSON Schema:
 {{
   "products": [
     {{
-      "klass_name": "Generic Product Type (e.g. 'Foley Catheter')",
-      "raw_product_name": "Full Original Name (e.g. '3-Way Silicone Foley Catheter')",
+      "klass_name": "Generic Product Type (e.g. 'Anesthesia Mask')",
+      "raw_product_name": "Exact Block Name (e.g. 'LB3012 PVC Free Anesthesia Mask')",
       "facet_bag": {{
-        "material": ["100% Silicone"],
-        "ways": "3-Way",
-        "tip_style": "Standard / Tiemann",
-        "cuff": "Cuffed / Uncuffed"
+        "material": ["TPE", "Polypropylene (PP)"],
+        "pvc_free": "True",
+        "use": "Single Patient Use"
       }},
       "variants": [
         {{
-          "cat_no": "LB123401",
+          "cat_no": "LB301201",
           "facet_bag": {{
-            "size": "16Fr",
-            "balloon_capacity": "30ml"
+            "size": "1# - Neonate",
+            "connector": "15mm OD"
           }}
         }}
       ]
@@ -282,19 +299,12 @@ def worker_loop():
                 
             task_id = job["task_id"]
             data = job["data"]
-            print(f"\n⚡ Processing: {task_id}")
-            
             t0 = time.time()
             img_payload = data.get("image_b64") or data.get("image_path")
             extracted_products = extract_products_from_image(img_payload, data["spread_num"])
             dur = time.time() - t0
             
-            print(f"   ↳ Extracted {len(extracted_products)} products ({dur:.1f}s)")
-            for p in extracted_products:
-                k = p.get('klass_name')
-                name = p.get('product_name')
-                print(f"       • 📦 [{k}] {name}")
-                
+            # Submit to Server Prime
             submit_resp = requests.post(
                 f"{SERVER_PRIME_URL}/api/submit-work",
                 json={"task_id": task_id, "products": extracted_products},
@@ -302,7 +312,15 @@ def worker_loop():
             )
             res_data = submit_resp.json()
             rem = res_data.get("remaining_tasks", "?")
-            print(f"   ↳ Server Prime status: {res_data.get('status')} | ⏳ Remaining in queue: {rem} tasks")
+
+            if extracted_products:
+                print(f"\n⚡ {task_id}: Ingested {len(extracted_products)} products ({dur:.1f}s) | ⏳ {rem} remaining")
+                for p in extracted_products:
+                    k = p.get('klass_name')
+                    name = p.get('product_name')
+                    print(f"    • 📦 [{k}] {name}")
+            else:
+                print(f"  ⏭️ {task_id}: [Non-product page skipped] | ⏳ {rem} remaining", end="\r", flush=True)
             
         except requests.exceptions.ConnectionError:
             print(f"  [!] Cannot connect to Server Prime at {SERVER_PRIME_URL}. Retrying...", end="\r", flush=True)
