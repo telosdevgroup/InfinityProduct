@@ -118,16 +118,31 @@ def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int =
             
     return {"enqueued_tasks": enqueued_count, "start_spread": start_spread, "end_spread": end_spread}
 
+import random
+
 @app.get("/api/get-work")
-def get_work(worker: str = "anonymous_worker"):
-    """DUMB worker asks for work. Server Prime finds and locks an atomic task, sending image bytes directly."""
+def get_work(worker: str = "anonymous_worker", shuffle: bool = True):
+    """DUMB worker asks for work. Server Prime selects tasks randomly across all catalogs to diversify ingestion."""
     now = datetime.datetime.now(datetime.timezone.utc)
     
-    task = tasks_col.find_one_and_update(
-        {"status": "pending"},
-        {"$set": {"status": "processing", "worker_id": worker, "claimed_at": now}},
-        sort=[("spread_num", 1), ("created_at", 1)]
-    )
+    if shuffle:
+        # Sample a random pending task ID to mix up catalogs and spread sections
+        pipeline = [{"$match": {"status": "pending"}}, {"$sample": {"size": 1}}]
+        samples = list(tasks_col.aggregate(pipeline))
+        if not samples:
+            return {"has_work": False}
+        target_id = samples[0]["task_id"]
+        
+        task = tasks_col.find_one_and_update(
+            {"task_id": target_id, "status": "pending"},
+            {"$set": {"status": "processing", "worker_id": worker, "claimed_at": now}}
+        )
+    else:
+        task = tasks_col.find_one_and_update(
+            {"status": "pending"},
+            {"$set": {"status": "processing", "worker_id": worker, "claimed_at": now}},
+            sort=[("spread_num", 1), ("created_at", 1)]
+        )
     
     if not task:
         return {"has_work": False}
