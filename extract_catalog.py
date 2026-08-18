@@ -235,36 +235,50 @@ def extract_facets_with_granite(page_text, page_num):
     prompt = f"""You are an expert medical catalog data extraction engine.
 Analyze the raw OCR text from page {page_num} of a medical & surgical consumables catalog.
 
-MISSION: Extract medical products into a COMPACT format with a 'variants' list for table rows/sizes.
+MISSION: Extract EVERY distinct product family and item block on the page!
+A single page typically contains 2 to 5 completely different product sections (e.g. Anesthesia Mask at the top, Endoscope Mask in the middle, and CPAP Mask at the bottom).
+You MUST extract ALL of them into the "products" list. Do NOT stop after the first product!
 
-CRITICAL NEGATIVE CONSTRAINTS:
-1. IGNORE SIDEBAR MARGIN TABS: The sidebar margin contains vertical section headers like "Wound Dressing", "Urology", "Hypodermic", "Examination", "Medical Non-woven & Accessories", "Others". NEVER use these as product or category names!
-
-Format per product:
-{{
-  "klass_name": "Natural category (e.g. 'Anesthesia Face Mask', 'Endotracheal Tube')",
-  "product_name": "Product family name",
-  "description": "Short summary of clinical use and key specifications",
-  "materials": ["Polymer/metal names only, e.g. Silicone, TPE, Medical Grade PVC"],
-  "compliance_flags": {{"latex_free": true/false, "sterile": true/false, "autoclavable": true/false}},
-  "variants": [
-    {{"cat_no": "LB301111", "size": "000#", "connector": "15mmOD"}},
-    {{"cat_no": "LB301100", "size": "0#", "demographic": "Neonate", "connector": "15mmOD"}},
-    {{"cat_no": "LB301102", "size": "2#", "demographic": "Pediatric", "color": "Yellow", "connector": "22mmID"}}
-  ]
-}}
+CRITICAL RULES:
+1. EXTRACT ALL PRODUCT FAMILIES: Look across the ENTIRE page from top to bottom and create a product entry for EACH distinct device or supply mentioned.
+2. EXTRACT VARIANTS TABLE: For each product family, put all its catalog numbers, sizes, and specs into its 'variants' list.
+3. IGNORE SIDEBAR MARGIN TABS: Ignore vertical margin navigation tabs like "Wound Dressing", "Urology", "Others".
 
 Output JSON format:
 {{
   "products": [
     {{
       "klass_name": "Anesthesia Face Mask",
-      "product_name": "PVC Free Anesthesia Mask",
-      "materials": ["TPE (Thermoplastic Elastomer)", "Polypropylene (PP)"],
-      "compliance_flags": {{"latex_free": true, "sterile": false}},
+      "product_name": "Silicone Anesthesia Mask",
+      "materials": ["Silicone", "Polycarbonate (PC)"],
+      "compliance_flags": {{"latex_free": true, "autoclavable": true}},
       "variants": [
-        {{"cat_no": "LB301111", "size": "000#", "connector": "15mmOD"}},
-        {{"cat_no": "LB301102", "size": "2#", "demographic": "Pediatric", "color": "Yellow", "connector": "22mmID"}}
+        {{"cat_no": "LB303101", "size": "1#", "connector": "15mmOD"}},
+        {{"cat_no": "LB303203", "size": "3#", "connector": "22mmID"}}
+      ]
+    }},
+    {{
+      "klass_name": "Endoscope Mask",
+      "product_name": "Endoscope Mask",
+      "cat_no": "LB3035",
+      "materials": ["Silicone"],
+      "compliance_flags": {{"latex_free": true}},
+      "variants": [
+        {{"size": "3#", "hole_diameter": "10mm"}},
+        {{"size": "4#", "hole_diameter": "12mm"}},
+        {{"size": "5#", "hole_diameter": "10mm, 12mm"}}
+      ]
+    }},
+    {{
+      "klass_name": "CPAP Mask",
+      "product_name": "Silicone CPAP Mask and Headgear",
+      "cat_no": "LB3041",
+      "materials": ["Silicone"],
+      "compliance_flags": {{"latex_free": true}},
+      "variants": [
+        {{"size": "S"}},
+        {{"size": "M"}},
+        {{"size": "L"}}
       ]
     }}
   ]
