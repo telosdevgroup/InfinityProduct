@@ -123,21 +123,37 @@ def extract_products_from_image(image_data, spread_num):
     if len(text.strip()) < 30:
         return []
         
-    prompt = f"""You are an expert medical catalog extraction engine.
-Extract EVERY distinct product model series from this catalog page OCR text into JSON.
-DO NOT FUSE DIFFERENT MODEL HEADINGS (e.g. LB3011, LB3012, LB3021, LB3030 are separate products).
+    prompt = f"""You are an expert medical device catalog extraction engine.
+Extract EVERY product model series from this catalog page OCR text into clean structured JSON.
 
-Output format:
+CRITICAL RULES:
+1. klass_name: Choose the ordinary generic product type that would remain if all configuration choices were removed (e.g. 'Foley Catheter', 'Endotracheal Tube', 'Tracheostomy Tube', 'Anesthesia Mask', 'Laryngeal Mask', 'Suction Catheter', 'Urethral Catheter', 'Urine Drainage Bag', 'Spinal Needle', 'Infusion Set').
+   - DO NOT include configuration adjectives in klass_name (e.g. do NOT output '3-Way Latex Foley Catheter', 'Oral Preformed Endotracheal Tube', 'Disposable PVC Laryngeal Mask' as klass_name).
+   - DO NOT over-generalize beyond the recognized product type (e.g. output 'Endobronchial Tube', NOT 'Tube').
+2. raw_product_name: Preserve the manufacturer's complete original name verbatim (e.g. '3-Way Latex Foley Catheter', 'Oral Preformed Endotracheal Tube').
+3. facet_bag: Extract EVERY meaningful qualifier removed from the name or stated in descriptions (e.g. ways, route, form, tip_style, construction, cuff, materials, compliance, balloon_capacity, connectors, etc.). Free-form discovered keys are expected.
+4. variants: List individual SKU entries with their SKU-specific facets (e.g. size, gauge, length, balloon_capacity).
+
+JSON Schema:
 {{
   "products": [
     {{
-      "klass_name": "Natural category (e.g. 'Anesthesia Face Mask')",
-      "product_name": "Product family name",
-      "materials": ["Polymer names, e.g. Silicone, Medical Grade PVC"],
-      "compliance_flags": {{"latex_free": true}},
+      "klass_name": "Generic Product Type (e.g. 'Foley Catheter')",
+      "raw_product_name": "Full Original Name (e.g. '3-Way Silicone Foley Catheter')",
+      "facet_bag": {{
+        "material": ["100% Silicone"],
+        "ways": "3-Way",
+        "tip_style": "Standard / Tiemann",
+        "cuff": "Cuffed / Uncuffed"
+      }},
       "variants": [
-        {{"cat_no": "LB301100", "size": "0#", "connector": "15mmOD"}},
-        {{"cat_no": "LB301102", "size": "2#", "connector": "22mmID"}}
+        {{
+          "cat_no": "LB123401",
+          "facet_bag": {{
+            "size": "16Fr",
+            "balloon_capacity": "30ml"
+          }}
+        }}
       ]
     }}
   ]
@@ -188,57 +204,56 @@ OCR Text:
             if not isinstance(prod, dict):
                 continue
             k_name = prod.get("klass_name", "General").strip()
-            base_name = prod.get("product_name", k_name).strip()
-            mats = normalize_materials(prod.get("materials", []))
-            comp = prod.get("compliance_flags", {})
-            desc = prod.get("description", "")
+            raw_p_name = prod.get("raw_product_name", prod.get("product_name", k_name)).strip()
             
-            # Check for shared family sizes (e.g. "L, M, S, XS")
-            family_sizes = normalize_sizes(prod.get("sizes", prod.get("attributes", {}).get("sizes", [])))
+            # Base family-level facets
+            base_facets = prod.get("facet_bag", prod.get("attributes", {}))
+            if not isinstance(base_facets, dict):
+                base_facets = {}
+                
+            # Extract materials cleanly
+            prod_mats = prod.get("materials", base_facets.get("material", base_facets.get("materials", [])))
+            mats = normalize_materials(prod_mats)
+            
             variants = prod.get("variants", [])
-            
-            # If variants exist AND family sizes exist, perform Cartesian explosion
-            if variants and family_sizes:
-                exploded_vars = []
-                for var in variants:
-                    if not isinstance(var, dict):
-                        continue
-                    if "size" in var and var["size"]:
-                        exploded_vars.append(var)
-                    else:
-                        for s in family_sizes:
-                            v_copy = dict(var)
-                            v_copy["size"] = s
-                            exploded_vars.append(v_copy)
-                variants = exploded_vars
-            elif not variants and family_sizes:
-                variants = [{"size": s} for s in family_sizes]
-            elif not variants:
-                variants = [prod.get("attributes", {})]
+            if not variants:
+                variants = [{"facet_bag": {}}]
                 
             for var in variants:
                 if not isinstance(var, dict):
                     continue
-                var_clean = {k: v for k, v in var.items() if v and str(v).lower() not in ["not specified", "null", "none", "n/a", "color"]}
-                var_clean.pop("color", None)
+                var_facets = var.get("facet_bag", var.get("attributes", {}))
+                if not isinstance(var_facets, dict):
+                    var_facets = {k: v for k, v in var.items() if k not in ["cat_no", "sku", "facet_bag"]}
+                    
+                # Merge product-level facet_bag + variant-level facet_bag
+                merged_facets = dict(base_facets)
+                merged_facets.update(var_facets)
                 
-                if "size" in var_clean:
-                    sz_norm = normalize_sizes(var_clean["size"])
-                    if sz_norm:
-                        var_clean["size"] = sz_norm[0]
-                        
-                sku = var_clean.pop("cat_no", None)
+                # Clean invalid/placeholder values
+                clean_facets = {}
+                for fk, fv in merged_facets.items():
+                    if fv and str(fv).lower() not in ["not specified", "null", "none", "n/a", "color", "unknown"]:
+                        if fk.lower() == "size":
+                            sz_norm = normalize_sizes(fv)
+                            clean_facets["size"] = sz_norm[0] if sz_norm else str(fv)
+                        elif isinstance(fv, list):
+                            clean_facets[fk] = [str(x).strip() for x in fv if x]
+                        else:
+                            clean_facets[fk] = str(fv).strip()
+                            
+                sku = var.get("cat_no", var.get("sku"))
                 sku_tag = f" [{sku}]" if sku else ""
-                size_label = f" (Size {var_clean['size']})" if "size" in var_clean else ""
+                size_label = f" (Size {clean_facets['size']})" if "size" in clean_facets else ""
                 
                 atomic.append({
                     "klass_name": k_name,
-                    "product_name": f"{base_name}{sku_tag}{size_label}",
+                    "product_name": f"{raw_p_name}{sku_tag}{size_label}",
+                    "raw_product_name": raw_p_name,
                     "cat_no": sku,
-                    "description": desc,
                     "materials": mats,
-                    "compliance_flags": comp,
-                    "attributes": {k: v for k, v in var_clean.items() if v}
+                    "facet_bag": clean_facets,
+                    "attributes": clean_facets
                 })
         return atomic
     except Exception as e:
@@ -287,7 +302,9 @@ def worker_loop():
                 json={"task_id": task_id, "products": extracted_products},
                 timeout=10
             )
-            print(f"   ↳ Server Prime status: {submit_resp.json().get('status')}")
+            res_data = submit_resp.json()
+            rem = res_data.get("remaining_tasks", "?")
+            print(f"   ↳ Server Prime status: {res_data.get('status')} | ⏳ Remaining in queue: {rem} tasks")
             
         except requests.exceptions.ConnectionError:
             print(f"  [!] Cannot connect to Server Prime at {SERVER_PRIME_URL}. Retrying...", end="\r", flush=True)

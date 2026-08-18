@@ -146,34 +146,13 @@ async def submit_work(request: Request):
         prod["ingested_at"] = now
         obs_col.insert_one(prod)
         
-        # 2. Update Klass living ontology
-        k_name = prod.get("klass_name", "General")
-        slug = k_name.lower().replace(" ", "-").replace("/", "-")
-        all_k_obs = list(obs_col.find({"klass_name": k_name}))
+    # 2. Delete task from queue
+    if task_id:
+        tasks_col.delete_one({"task_id": task_id})
         
-        all_mats = sorted(list(set(m for o in all_k_obs for m in o.get("materials", []))))
-        all_sizes = sorted(list(set(o.get("attributes", {}).get("size") for o in all_k_obs if o.get("attributes", {}).get("size"))))
-        
-        klass_col.update_one(
-            {"slug": slug},
-            {
-                "$set": {
-                    "name": k_name,
-                    "slug": slug,
-                    "total_observations": len(all_k_obs),
-                    "observed_facet_space": {
-                        "materials": all_mats,
-                        "sizes": all_sizes
-                    },
-                    "updated_at": now
-                },
-                "$setOnInsert": {"created_at": now}
-            },
-            upsert=True
-        )
-    return {"status": "ok", "ingested": len(products)}
+    remaining = tasks_col.count_documents({})
+    return {"status": "ok", "ingested": len(products), "remaining_tasks": remaining}
 
-from facet_bag_synthesizer import build_facet_bag_for_klass
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -291,11 +270,50 @@ BASE_CSS = """
     }
 """
 
+def derive_facet_bag_from_observations(obs_list: list) -> dict:
+    """Runtime derivation: computes a clean FacetBag view directly over a set of observations."""
+    bag = {}
+    
+    # 1. Materials
+    mats = sorted(list(set(m for o in obs_list for m in o.get("materials", []))))
+    if mats:
+        bag["Material"] = mats
+        
+    # 2. All arbitrary dynamic keys discovered in facet_bag / attributes
+    all_keys = set()
+    for o in obs_list:
+        all_keys.update(o.get("facet_bag", {}).keys())
+        all_keys.update(o.get("attributes", {}).keys())
+        
+    for k in sorted(list(all_keys)):
+        if k.lower() in ["material", "materials", "klass_name", "product_name", "raw_product_name", "cat_no", "sku"]:
+            continue
+        vals = set()
+        for o in obs_list:
+            v = o.get("facet_bag", {}).get(k) or o.get("attributes", {}).get(k)
+            if isinstance(v, list):
+                vals.update([str(x).strip() for x in v if x])
+            elif v and str(v).lower() not in ["none", "n/a", "null"]:
+                vals.add(str(v).strip())
+        if vals:
+            # Natural sort for sizes / numbers
+            if k.lower() in ["size", "volume", "length", "gauge", "balloon_capacity", "drops"]:
+                def s_sort(s):
+                    m = re.search(r"[-+]?\d*\.\d+|\d+", str(s))
+                    return (float(m.group(0)) if m else 9999, str(s))
+                bag[k.replace("_", " ").title()] = sorted(list(vals), key=s_sort)
+            else:
+                bag[k.replace("_", " ").title()] = sorted(list(vals))
+                
+    return bag
+
 @app.get("/", response_class=HTMLResponse)
 def index():
-    """Generic root directory of all Klasses in the corpus."""
-    klasses = list(klass_col.find({}).sort("name", 1))
-    chips = "".join([f'<a href="/klass/{k["slug"]}" class="klass-chip">{k["name"]}</a>' for k in klasses])
+    """Generic root: derives all observed Klasses dynamically from observations."""
+    raw_klasses = obs_col.distinct("klass_name")
+    clean_klasses = sorted([k for k in raw_klasses if k and len(k.strip()) > 1])
+    
+    chips = "".join([f'<a href="/klass/{k.lower().replace(" ", "-").replace("/", "-")}" class="klass-chip">{k}</a>' for k in clean_klasses])
     
     html = f"""
     <!DOCTYPE html>
@@ -309,9 +327,9 @@ def index():
         <div class="container">
             <div class="card">
                 <h1>Infinity Product</h1>
-                <div class="facet-label">Observed Klasses ({len(klasses)})</div>
+                <div class="facet-label">Observed Klasses ({len(clean_klasses)})</div>
                 <div class="chip-bag">
-                    {chips}
+                    {chips or '<span style="color:#94a3b8;">No observations ingested yet.</span>'}
                 </div>
             </div>
         </div>
@@ -322,32 +340,24 @@ def index():
 
 
 @app.get("/klass/{slug}", response_class=HTMLResponse)
-def view_klass_facet_bag(slug: str):
-    """Pure Generic Klass View: Name -> Image -> Bag of Labeled Chips."""
-    klass = klass_col.find_one({"slug": slug})
-    if not klass:
-        klass = klass_col.find_one({"name": {"$regex": f"^{slug.replace('-', ' ')}$", "$options": "i"}})
-        
-    if not klass:
-        return HTMLResponse("<h2>Klass not found</h2>", status_code=404)
-        
-    k_name = klass["name"]
-    facet_bag = klass.get("facet_bag")
+def view_klass(slug: str):
+    """Pure Runtime View: Queries raw observations for this Klass and derives the FacetBag instantly."""
+    clean_name = slug.replace("-", " ")
+    obs_list = list(obs_col.find({"klass_name": {"$regex": f"^{clean_name}$", "$options": "i"}}))
     
-    # Auto-synthesize on the fly if missing
-    if not facet_bag:
-        obs_list = list(obs_col.find({"klass_name": {"$regex": f"^{k_name}$", "$options": "i"}}))
-        facet_bag = build_facet_bag_for_klass(k_name, obs_list)
-        klass_col.update_one({"_id": klass["_id"]}, {"$set": {"facet_bag": facet_bag}})
-
-    # Find hero image from first observation if available
-    first_obs = obs_col.find_one({"klass_name": {"$regex": f"^{k_name}$", "$options": "i"}})
+    if not obs_list:
+        return HTMLResponse("<h2>Klass not found in current observations</h2>", status_code=404)
+        
+    k_name = obs_list[0].get("klass_name", clean_name.title())
+    facet_bag = derive_facet_bag_from_observations(obs_list)
+    
+    # Hero image from first observation if available
     img_html = ""
-    if first_obs:
-        spread_num = first_obs.get("spread_num")
-        side = first_obs.get("side", "left")
-        if spread_num:
-            img_path = f"/assets/catalog_pages/spread_{spread_num:02d}_{side}.jpg"
+    spread_num = obs_list[0].get("spread_num")
+    side = obs_list[0].get("side", "left")
+    if spread_num:
+        img_path = f"/assets/catalog_pages/spread_{spread_num:02d}_{side}.jpg"
+        if os.path.exists(f"assets/catalog_pages/spread_{spread_num:02d}_{side}.jpg"):
             img_html = f'<img src="{img_path}" class="hero-img" alt="{k_name}" />'
 
     # Render labeled chip rows
@@ -393,22 +403,24 @@ def view_klass_facet_bag(slug: str):
 
 @app.get("/facet/{facet_name}/{facet_val}", response_class=HTMLResponse)
 def view_inverted_facet(facet_name: str, facet_val: str):
-    """Pure Generic Inverted View: Value -> Observed on: -> Bag of Klass Chips."""
+    """Pure Runtime Inversion: Searches raw observations for the facet value and groups by Klass."""
     clean_val = facet_val.replace("-", " ")
     
-    # Find all Klasses that share this facet value in their FacetBag
-    query_key = f"facet_bag.{facet_name}"
-    klasses = list(klass_col.find({
-        "$or": [
-            {query_key: {"$regex": f"^{clean_val}$", "$options": "i"}},
-            {f"facet_bag.{facet_name}": clean_val}
-        ]
-    }).sort("name", 1))
-
-    if not klasses and facet_name.lower() == "material":
-        klasses = list(klass_col.find({"observed_facet_space.materials": {"$regex": f"^{clean_val}$", "$options": "i"}}).sort("name", 1))
-
-    chips = "".join([f'<a href="/klass/{k["slug"]}" class="klass-chip">{k["name"]}</a>' for k in klasses])
+    # Dynamic MongoDB query matching facet value across materials, facet_bag, or attributes
+    if facet_name.lower() in ["material", "materials"]:
+        query = {"materials": {"$regex": f"^{clean_val}$", "$options": "i"}}
+    else:
+        query = {
+            "$or": [
+                {f"facet_bag.{facet_name.lower()}": {"$regex": f"^{clean_val}$", "$options": "i"}},
+                {f"attributes.{facet_name.lower()}": {"$regex": f"^{clean_val}$", "$options": "i"}},
+                {f"facet_bag.{facet_name}": clean_val},
+                {f"attributes.{facet_name}": clean_val}
+            ]
+        }
+        
+    matching_klasses = sorted(list(set(obs_col.distinct("klass_name", query))))
+    chips = "".join([f'<a href="/klass/{k.lower().replace(" ", "-").replace("/", "-")}" class="klass-chip">{k}</a>' for k in matching_klasses if k])
 
     html = f"""
     <!DOCTYPE html>
@@ -430,7 +442,7 @@ def view_inverted_facet(facet_name: str, facet_val: str):
                 <div class="facet-group">
                     <div class="facet-label">Observed on:</div>
                     <div class="chip-bag">
-                        {chips or '<span style="color:#94a3b8;">No connected Klasses</span>'}
+                        {chips or '<span style="color:#94a3b8;">No connected Klasses found</span>'}
                     </div>
                 </div>
             </div>
