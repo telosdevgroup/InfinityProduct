@@ -444,6 +444,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8371))
     print(f"\n==================================================")
     print(f"  ⚡ SERVER PRIME - Infinity Product Swarm Master")
-    print(f"  Listening on: http://0.0.0.0:{port}")
+    print(f"  Listening on: http://0.0.0.0:{port} (Auto-Reload Enabled)")
     print(f"==================================================\n")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run("server_prime:app", host="0.0.0.0", port=port, reload=True)
