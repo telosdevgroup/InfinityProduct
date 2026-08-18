@@ -109,17 +109,13 @@ def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int =
 
 @app.get("/api/get-work")
 def get_work(worker: str = "anonymous_worker"):
-    """DUMB worker asks for work. Server Prime pops/deletes 1 random task and returns it."""
-    # Pop a random task from the queue
+    """DUMB worker asks for work. Server Prime selects 1 random task and returns it."""
     pipeline = [{"$sample": {"size": 1}}]
     samples = list(tasks_col.aggregate(pipeline))
     if not samples:
         return {"has_work": False}
         
     task = samples[0]
-    # Delete immediately
-    tasks_col.delete_one({"_id": task["_id"]})
-    
     img_b64 = None
     if os.path.exists(task["image_path"]):
         with open(task["image_path"], "rb") as f:
@@ -139,7 +135,7 @@ def get_work(worker: str = "anonymous_worker"):
 
 @app.post("/api/submit-work")
 async def submit_work(request: Request):
-    """DUMB worker returns products payload. Server Prime saves to MongoDB."""
+    """DUMB worker returns products payload. Server Prime saves to MongoDB and DELETES the task from queue."""
     payload = await request.json()
     task_id = payload.get("task_id")
     products = payload.get("products", [])
@@ -176,7 +172,9 @@ async def submit_work(request: Request):
             upsert=True
         )
         
-    print(f"  ✅ [Task {task_id}] Received! Saved {len(products)} observations.")
+    # 3. Only delete task from queue once payload is successfully saved!
+    tasks_col.delete_one({"task_id": task_id})
+    print(f"  ✅ [Task {task_id}] Completed & deleted from queue! Saved {len(products)} observations.")
     return {"status": "ok", "ingested": len(products)}
 
 if __name__ == "__main__":
