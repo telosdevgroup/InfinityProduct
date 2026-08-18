@@ -57,6 +57,16 @@ def get_status():
         "total_klasses": total_klasses
     }
 
+@app.post("/api/reset-queue")
+def reset_queue(purge_data: bool = True):
+    """Purge all queue states and observations for a completely fresh swarm run."""
+    tasks_col.delete_many({})
+    if purge_data:
+        obs_col.delete_many({})
+        klass_col.delete_many({})
+    print("🧹 [Server Prime] Queue and data completely purged!")
+    return {"status": "purged", "message": "All tasks and data wiped clean"}
+
 @app.post("/api/enqueue-catalog")
 def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int = 4, end_spread: int = 48):
     """Seed atomic page tasks into swarm_tasks queue from a catalog PDF."""
