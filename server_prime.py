@@ -171,79 +171,49 @@ async def submit_work(request: Request):
             },
             upsert=True
         )
-        
+   from facet_bag_synthesizer import build_facet_bag_for_klass
+
 from fastapi.responses import HTMLResponse
 
 @app.get("/klass/{slug}", response_class=HTMLResponse)
-def view_klass_diagnostic(slug: str):
-    """Diagnostic Explorer: High-density Variant Matrix and Family Tree, eliminating wall-of-text repetition."""
+def view_klass_facet_bag(slug: str):
+    """The FacetBag Plant: A clean, direct visualization of the Klass and its configuration space."""
     klass = klass_col.find_one({"slug": slug})
     if not klass:
         klass = klass_col.find_one({"name": {"$regex": f"^{slug.replace('-', ' ')}$", "$options": "i"}})
         
-    k_name = klass["name"] if klass else slug.replace("-", " ").title()
-    observations = list(obs_col.find({"klass_name": {"$regex": f"^{k_name}$", "$options": "i"}}))
-    
-    observed_mats = sorted(list(set(m for o in observations for m in o.get("materials", []))))
-    
-    # Group observations by Model Series (e.g. "LB5110 Uncuffed", "LB5120 Cuffed", "LB5130 Reinforced")
-    families = {}
-    for o in observations:
-        p_name = o.get("product_name", "")
-        # Extract clean family prefix
-        family_name = p_name.split("[")[0].strip() if "[" in p_name else p_name
-        family_name = family_name.split("(Size")[0].strip()
-        families.setdefault(family_name, []).append(o)
+    if not klass:
+        return HTMLResponse("<h2>Klass not found</h2>", status_code=404)
         
-    family_sections = ""
-    for fam_name, obs_list in sorted(families.items()):
-        # Extract unique materials for this family
-        fam_mats = sorted(list(set(m for o in obs_list for m in o.get("materials", []))))
-        mats_badge = " ".join([f'<a href="/material/{m.lower()}" style="background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:11px;font-weight:600;margin-right:4px;">{m}</a>' for m in fam_mats]) or '<span style="color:#94a3b8;font-size:12px;">None</span>'
-        
-        # Build compact variant rows
-        rows = ""
-        # Sort by size or SKU
-        sorted_obs = sorted(obs_list, key=lambda x: str(x.get("attributes", {}).get("size") or x.get("cat_no") or ""))
-        for o in sorted_obs:
-            sku = o.get("cat_no") or "N/A"
-            size = o.get("attributes", {}).get("size") or "—"
-            other_attrs = {k: v for k, v in o.get("attributes", {}).items() if k != "size"}
-            attr_summary = ", ".join([f"{k}: {v}" for k, v in other_attrs.items()]) if other_attrs else "—"
-            
-            rows += f"""
-            <tr style="border-bottom:1px solid #f1f5f9;font-size:12px;">
-                <td style="padding:6px 12px;font-family:monospace;font-weight:700;color:#0f766e;">{sku}</td>
-                <td style="padding:6px 12px;font-weight:600;color:#0f172a;">{size}</td>
-                <td style="padding:6px 12px;color:#64748b;">{attr_summary}</td>
-                <td style="padding:6px 12px;color:#94a3b8;font-size:11px;text-align:right;">Spread {o.get('spread_num', '?')}</td>
-            </tr>
+    k_name = klass["name"]
+    facet_bag = klass.get("facet_bag")
+    
+    # If not yet generated, build on the fly
+    if not facet_bag:
+        obs_list = list(obs_col.find({"klass_name": {"$regex": f"^{k_name}$", "$options": "i"}}))
+        facet_bag = build_facet_bag_for_klass(k_name, obs_list)
+        klass_col.update_one({"_id": klass["_id"]}, {"$set": {"facet_bag": facet_bag}})
+
+    obs_count = klass.get("total_observations") or obs_col.count_documents({"klass_name": {"$regex": f"^{k_name}$", "$options": "i"}})
+
+    # Render each Facet cleanly
+    facet_sections = ""
+    for facet_name, values in facet_bag.items():
+        pills = ""
+        for v in values:
+            v_encoded = str(v).replace("/", "-").replace(" ", "-")
+            pills += f"""
+            <a href="/facet/{facet_name}/{v_encoded}" class="facet-pill">
+                {v}
+            </a>
             """
             
-        family_sections += f"""
-        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,0.02);">
-            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e2e8f0;padding-bottom:10px;margin-bottom:12px;">
-                <div>
-                    <h3 style="margin:0;font-size:15px;color:#0f172a;font-weight:700;">{fam_name}</h3>
-                    <div style="margin-top:4px;font-size:12px;color:#64748b;">Materials: {mats_badge}</div>
-                </div>
-                <span style="background:#f1f5f9;border:1px solid #cbd5e1;color:#475569;font-size:12px;font-weight:700;padding:3px 8px;border-radius:4px;">
-                    {len(obs_list)} sizes / SKUs
-                </span>
+        facet_sections += f"""
+        <div class="facet-group">
+            <div class="facet-label">{facet_name}</div>
+            <div class="facet-values">
+                {pills or '<span style="color:#94a3b8;font-size:13px;">None</span>'}
             </div>
-            <table style="width:100%;border-collapse:collapse;text-align:left;">
-                <thead>
-                    <tr style="background:#f8fafc;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #e2e8f0;">
-                        <th style="padding:6px 12px;">Catalog SKU</th>
-                        <th style="padding:6px 12px;">Observed Size</th>
-                        <th style="padding:6px 12px;">Features / Attributes</th>
-                        <th style="padding:6px 12px;text-align:right;">Source</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows}
-                </tbody>
-            </table>
         </div>
         """
 
@@ -251,151 +221,224 @@ def view_klass_diagnostic(slug: str):
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Klass Diagnostic: {k_name}</title>
+        <title>{k_name} — Infinity Product</title>
         <meta charset="utf-8">
         <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #1e293b; margin: 0; padding: 28px; line-height: 1.5; }}
-            .container {{ max-width: 960px; margin: 0 auto; }}
-            .header {{ background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }}
-            .badge-pill {{ background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-right: 4px; display: inline-block; }}
-            a {{ color: #0284c7; text-decoration: none; }}
-            a:hover {{ text-decoration: underline; }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                background: #f8fafc;
+                color: #0f172a;
+                margin: 0;
+                padding: 40px 20px;
+                line-height: 1.5;
+            }}
+            .container {{
+                max-width: 780px;
+                margin: 0 auto;
+            }}
+            .plant-card {{
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                padding: 32px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+            }}
+            .header {{
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                border-bottom: 2px solid #f1f5f9;
+                padding-bottom: 16px;
+                margin-bottom: 24px;
+            }}
+            h1 {{
+                margin: 0;
+                font-size: 26px;
+                font-weight: 700;
+                color: #0f172a;
+                letter-spacing: -0.3px;
+            }}
+            .obs-meta {{
+                font-size: 13px;
+                color: #64748b;
+                font-weight: 500;
+            }}
+            .facet-group {{
+                margin-bottom: 22px;
+            }}
+            .facet-label {{
+                font-size: 13px;
+                font-weight: 700;
+                color: #475569;
+                text-transform: uppercase;
+                letter-spacing: 0.6px;
+                margin-bottom: 8px;
+            }}
+            .facet-values {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+            }}
+            .facet-pill {{
+                background: #f1f5f9;
+                color: #0369a1;
+                border: 1px solid #e2e8f0;
+                padding: 5px 12px;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+                text-decoration: none;
+                transition: all 0.15s ease;
+            }}
+            .facet-pill:hover {{
+                background: #e0f2fe;
+                border-color: #bae6fd;
+                color: #0284c7;
+            }}
+            .nav-link {{
+                color: #0284c7;
+                text-decoration: none;
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            .nav-link:hover {{
+                text-decoration: underline;
+            }}
         </style>
     </head>
     <body>
         <div class="container">
-            <div style="margin-bottom:14px;">
-                <a href="/material/silicone" style="font-size:13px;font-weight:600;">← View Material Diagnostic: Silicone</a>
+            <div style="margin-bottom: 16px;">
+                <a href="/facet/Material/Medical-Grade-PVC" class="nav-link">← Inverted Explorer: Medical Grade PVC</a>
             </div>
-            <div class="header">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                    <div>
-                        <div style="font-size:12px;font-weight:700;color:#0284c7;text-transform:uppercase;letter-spacing:0.5px;">Klass Diagnostic View</div>
-                        <h1 style="margin:4px 0 0 0;font-size:22px;color:#0f172a;">{k_name}</h1>
-                    </div>
-                    <span style="background:#0284c7;color:#ffffff;padding:5px 12px;border-radius:4px;font-size:13px;font-weight:700;">
-                        {len(observations)} Empirical Observations
-                    </span>
+            
+            <div class="plant-card">
+                <div class="header">
+                    <h1>{k_name}</h1>
+                    <div class="obs-meta">Synthesized from {obs_count} observations</div>
                 </div>
-                <div style="margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-                    <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:14px;border-radius:6px;">
-                        <div style="font-size:11px;color:#64748b;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Observed Materials</div>
-                        <div style="margin-top:8px;">
-                            {' '.join([f'<a href="/material/{m.lower()}" class="badge-pill" style="background:#e0f2fe;color:#0369a1;border-color:#bae6fd;">{m}</a>' for m in observed_mats]) or '<span style="color:#94a3b8;font-size:13px;">None</span>'}
-                        </div>
-                    </div>
-                    <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:14px;border-radius:6px;">
-                        <div style="font-size:11px;color:#64748b;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Observed Dimensions ({len(observed_sizes)})</div>
-                        <div style="margin-top:8px;max-height:85px;overflow-y:auto;">
-                            {' '.join([f'<span class="badge-pill">{s}</span>' for s in observed_sizes]) or '<span style="color:#94a3b8;font-size:13px;">None</span>'}
-                        </div>
-                    </div>
-                </div>
-            </div>
 
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <h3 style="color:#334155;margin:0;font-size:16px;">Manufactured Model Series & Size Matrix</h3>
+                {facet_sections}
             </div>
-            {family_sections or '<p style="color:#64748b;">No observations found for this Klass.</p>'}
         </div>
     </body>
     </html>
     """
     return HTMLResponse(content=html)
 
+
+@app.get("/facet/{facet_name}/{facet_val}", response_class=HTMLResponse)
+def view_inverted_facet(facet_name: str, facet_val: str):
+    """Inverted Destination Explorer: View every Klass in the universe sharing this exact facet value."""
+    clean_val = facet_val.replace("-", " ")
+    
+    # Query Klasses matching this facet in their FacetBag
+    query_key = f"facet_bag.{facet_name}"
+    klasses = list(klass_col.find({
+        "$or": [
+            {query_key: {"$regex": f"^{clean_val}$", "$options": "i"}},
+            {f"facet_bag.{facet_name}": clean_val}
+        ]
+    }).sort("name", 1))
+
+    # Also check if query is material
+    if not klasses and facet_name.lower() == "material":
+        klasses = list(klass_col.find({"observed_facet_space.materials": {"$regex": f"^{clean_val}$", "$options": "i"}}).sort("name", 1))
+
+    klass_cards = ""
+    for k in klasses:
+        k_name = k["name"]
+        k_slug = k["slug"]
+        bag = k.get("facet_bag", {})
+        obs_count = k.get("total_observations", 0)
+        
+        other_facets = " • ".join([f"{fn}: {len(fv)}" for fn, fv in bag.items() if fn != facet_name])
+        
+        klass_cards += f"""
+        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:16px 20px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 1px 2px rgba(0,0,0,0.02);">
+            <div>
+                <a href="/klass/{k_slug}" style="color:#0f172a;font-size:16px;font-weight:700;text-decoration:none;">{k_name}</a>
+                <div style="font-size:12px;color:#64748b;margin-top:3px;">{other_facets}</div>
+            </div>
+            <span style="background:#f1f5f9;border:1px solid #e2e8f0;color:#0f766e;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;">
+                {obs_count} variants
+            </span>
+        </div>
+        """
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>{clean_val.title()} ({facet_name}) — Infinity Product</title>
+        <meta charset="utf-8">
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                background: #f8fafc;
+                color: #0f172a;
+                margin: 0;
+                padding: 40px 20px;
+                line-height: 1.5;
+            }}
+            .container {{
+                max-width: 780px;
+                margin: 0 auto;
+            }}
+            .header-card {{
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                padding: 24px 32px;
+                margin-bottom: 20px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+            }}
+            h1 {{
+                margin: 0;
+                font-size: 24px;
+                font-weight: 700;
+                color: #0f172a;
+            }}
+            .label {{
+                font-size: 12px;
+                font-weight: 700;
+                color: #0f766e;
+                text-transform: uppercase;
+                letter-spacing: 0.6px;
+                margin-bottom: 4px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div style="margin-bottom:16px;">
+                <a href="/klass/tracheostomy-tube" style="color:#0284c7;text-decoration:none;font-size:13px;font-weight:600;">← Return to Tracheostomy Tube</a>
+            </div>
+            
+            <div class="header-card">
+                <div class="label">Inverted Facet Destination</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <h1>{clean_val.title()}</h1>
+                    <span style="background:#0f766e;color:#ffffff;padding:4px 12px;border-radius:4px;font-size:13px;font-weight:700;">
+                        {len(klasses)} Connected Klasses
+                    </span>
+                </div>
+            </div>
+
+            <div style="font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;">
+                Klasses Manufactured with {clean_val.title()}
+            </div>
+
+            {klass_cards or '<p style="color:#64748b;">No Klasses found for this facet value.</p>'}
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
 
 @app.get("/material/{mat_name}", response_class=HTMLResponse)
-def view_material_diagnostic(mat_name: str):
-    """Inverted Diagnostic Explorer: clean business light theme connecting Klasses to materials."""
-    target_mat = mat_name.strip()
-    observations = list(obs_col.find({"materials": {"$regex": f"^{target_mat}$", "$options": "i"}}))
-    
-    klass_groups = {}
-    for o in observations:
-        k = o.get("klass_name", "Uncategorized")
-        klass_groups.setdefault(k, []).append(o)
-        
-    sorted_klasses = sorted(klass_groups.items(), key=lambda x: len(x[1]), reverse=True)
-    
-    sections = ""
-    for k_name, obs_list in sorted_klasses:
-        k_slug = k_name.lower().replace(" ", "-").replace("/", "-")
-        
-        is_single = len(obs_list) == 1
-        badge_style = "background:#fef2f2;color:#991b1b;border:1px solid #fecaca;" if is_single else "background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;"
-        badge_text = "⚠️ 1 Observation (Inspect for Bleed)" if is_single else f"✓ {len(obs_list)} observations"
-        
-        sample_obs_html = ""
-        for o in obs_list[:4]:
-            attrs = o.get("attributes", {})
-            attr_str = " | ".join([f"{k.replace('_', ' ').title()}: {v}" for k, v in attrs.items()]) if attrs else "No extra attributes"
-            sample_obs_html += f"""
-            <div style="background:#ffffff;border:1px solid #f1f5f9;padding:8px 12px;border-radius:4px;margin-top:6px;font-size:12px;">
-                <div style="display:flex;justify-content:space-between;">
-                    <span style="color:#0f172a;font-weight:600;">{o.get('product_name')}</span>
-                    <span style="color:#0f766e;font-weight:600;">SKU: {o.get('cat_no') or 'N/A'}</span>
-                </div>
-                <div style="color:#64748b;margin-top:2px;">{attr_str}</div>
-                <div style="color:#94a3b8;font-size:10px;margin-top:4px;">Spread: {o.get('spread_num', '?')} | Source: {o.get('source_catalog', 'foyomed catalogue.pdf')}</div>
-            </div>
-            """
-            
-        sections += f"""
-        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-                <h3 style="margin:0;font-size:16px;">
-                    <a href="/klass/{k_slug}" style="color:#0f172a;font-weight:700;">🏷️ {k_name}</a>
-                </h3>
-                <span style="{badge_style}padding:3px 10px;border-radius:4px;font-size:12px;font-weight:600;">{badge_text}</span>
-            </div>
-            <div style="margin-top:8px;background:#f8fafc;padding:8px;border-radius:6px;border:1px solid #f1f5f9;">
-                {sample_obs_html}
-                {f'<div style="font-size:11px;color:#64748b;margin-top:6px;padding-left:4px;">+ {len(obs_list)-4} more observations...</div>' if len(obs_list) > 4 else ''}
-            </div>
-        </div>
-        """
-
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Material Diagnostic: {target_mat.title()}</title>
-        <meta charset="utf-8">
-        <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #1e293b; margin: 0; padding: 28px; line-height: 1.5; }}
-            .container {{ max-width: 960px; margin: 0 auto; }}
-            .header {{ background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }}
-            a {{ color: #0284c7; text-decoration: none; }}
-            a:hover {{ text-decoration: underline; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div style="margin-bottom:14px;">
-                <a href="/klass/tracheostomy-tube" style="font-size:13px;font-weight:600;">← View Klass Diagnostic: Tracheostomy Tube</a>
-            </div>
-            <div class="header">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                    <div>
-                        <div style="font-size:12px;font-weight:700;color:#0f766e;text-transform:uppercase;letter-spacing:0.5px;">Inverted Material Facet</div>
-                        <h1 style="margin:4px 0 0 0;font-size:22px;color:#0f172a;">{target_mat.title()}</h1>
-                    </div>
-                    <span style="background:#0f766e;color:#ffffff;padding:5px 12px;border-radius:4px;font-size:13px;font-weight:700;">
-                        {len(observations)} Observations / {len(klass_groups)} Klasses
-                    </span>
-                </div>
-                <p style="color:#64748b;font-size:13px;margin:10px 0 0 0;">
-                    Lineage mapping connecting raw catalog evidence to Klass categories. Green indicates recurring multi-observation consensus; red flags singletons for ETL bleed inspection.
-                </p>
-            </div>
-
-            <h3 style="color:#334155;margin:0 0 12px 0;font-size:16px;">Connected Klasses & Lineage</h3>
-            {sections or '<p style="color:#64748b;">No observations found for this material.</p>'}
-        </div>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html)
+def redirect_material(mat_name: str):
+    return view_inverted_facet("Material", mat_name)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8371))
