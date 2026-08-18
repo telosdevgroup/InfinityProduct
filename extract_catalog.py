@@ -1,18 +1,18 @@
 import os
-import io
-import re
 import sys
 import json
 import time
-import requests
+import base64
+import io
+import re
 import datetime
-import numpy as np
-from pymongo import MongoClient
+import requests
 import pypdfium2 as pdfium
-from rapidocr_onnxruntime import RapidOCR
+from PIL import Image
+from pymongo import MongoClient
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "granite4.1:8b"
+MODEL_NAME = "qwen3-vl:latest"
 MONGO_URI = "mongodb://localhost:27017/"
 DB_NAME = "infinityproduct_dev"
 OBSERVATIONS_COLL = "observations"
@@ -24,7 +24,6 @@ def normalize_sizes(sizes_input):
     if not sizes_input:
         return []
     
-    # Handle single string like "Size O#-Neonate" or list
     if isinstance(sizes_input, str):
         sizes_list = [sizes_input]
     elif isinstance(sizes_input, list):
@@ -35,29 +34,24 @@ def normalize_sizes(sizes_input):
     standard_sizes = []
     for s in sizes_list:
         text = str(s).strip()
-        # Fix OCR confusion where letter 'O' was scanned instead of '0'
         text = re.sub(r'\bO\s*#', '0#', text, flags=re.IGNORECASE)
         text = re.sub(r'\b(OO|OOO)\s*#', lambda m: '00#' if len(m.group(1))==2 else '000#', text, flags=re.IGNORECASE)
         
-        # Match medical sharp sizes: 000#, 00#, 0#, 1#, 2#, 3#, 4#, 5#, 6#
         num_match = re.search(r'(000|00|[0-6])\s*#', text)
         if num_match:
             standard_sizes.append(f"{num_match.group(1)}#")
             continue
             
-        # Match Fr sizes
         fr_match = re.search(r'Fr\s*(\d+)', text, re.IGNORECASE)
         if fr_match:
             standard_sizes.append(f"Fr{fr_match.group(1)}")
             continue
             
-        # Match standard alpha sizes
         alpha_match = re.search(r'\b(XS|S|M|L|XL|XXL)\b', text, re.IGNORECASE)
         if alpha_match:
             standard_sizes.append(alpha_match.group(1).upper())
             continue
             
-        # If it's a clean short string, preserve it
         if len(text) <= 15 and not any(c in text for c in ["\n", "{", "}"]):
             standard_sizes.append(text)
             
@@ -67,6 +61,47 @@ def normalize_sizes(sizes_input):
         if sz not in seen:
             seen.add(sz)
             deduped.append(sz)
+    return deduped
+
+def normalize_materials(materials_list):
+    """Deterministically sanitize and canonicalize chemical polymer terminology."""
+    if not materials_list:
+        return []
+    if isinstance(materials_list, str):
+        materials_list = [materials_list]
+        
+    canonical = []
+    for mat in materials_list:
+        m = str(mat).strip().lower()
+        if any(ign in m for ign in ["latex free", "dehp free", "sterile", "single patient", "non-toxic"]):
+            continue
+        if "silicon" in m:
+            canonical.append("Silicone")
+        elif "pvc" in m or "polyvinyl" in m:
+            canonical.append("Medical Grade PVC")
+        elif "tpe" in m or "thermoplastic" in m:
+            canonical.append("TPE (Thermoplastic Elastomer)")
+        elif "polycarbonate" in m or re.search(r'\bpc\b', m):
+            canonical.append("Polycarbonate (PC)")
+        elif "polypropylene" in m or re.search(r'\bpp\b', m):
+            canonical.append("Polypropylene (PP)")
+        elif "polyethylene" in m or re.search(r'\bpe\b', m):
+            canonical.append("Polyethylene (PE)")
+        elif "steel" in m:
+            canonical.append("Stainless Steel")
+        elif "cotton" in m:
+            canonical.append("Cotton")
+        elif "non-woven" in m or "nonwoven" in m:
+            canonical.append("Medical Non-woven")
+        elif len(m) > 2 and len(m) < 40:
+            canonical.append(mat.strip().title())
+            
+    seen = set()
+    deduped = []
+    for c in canonical:
+        if c not in seen:
+            seen.add(c)
+            deduped.append(c)
     return deduped
 
 def register_catalog_source(pdf_path, total_pages, ingested_obs_count, klass_histogram, start_page=4, end_page=48):
@@ -105,8 +140,8 @@ def register_catalog_source(pdf_path, total_pages, ingested_obs_count, klass_his
     except Exception as e:
         print(f"  [!] Catalog registration error: {e}")
 
-def persist_and_rollup_to_mongodb(observations, source_pdf="foyomed catalogue.pdf", sheet_num=7):
-    """Persist raw observations and auto-rebuild the aggregate Klass facet space."""
+def persist_and_rollup_to_mongodb(observations, source_pdf="foyomed catalogue.pdf"):
+    """Persist atomic observations to MongoDB and update living Klass ontology documents."""
     if not observations:
         return
         
@@ -118,178 +153,106 @@ def persist_and_rollup_to_mongodb(observations, source_pdf="foyomed catalogue.pd
         
         now = datetime.datetime.now(datetime.timezone.utc)
         
+        # 1. Insert Observations
         for obs in observations:
-            klass_name = obs.get("klass_name", "General Medical Consumable")
+            obs["source_catalog"] = os.path.basename(source_pdf)
+            obs["ingested_at"] = now
+            obs_col.insert_one(obs)
             
-            # 1. Insert/update the raw observation instance
-            obs_doc = {
-                "klass_name": klass_name,
-                "product_name": obs.get("product_name"),
-                "description": obs.get("description"),
-                "materials": obs.get("materials", []),
-                "compliance_flags": obs.get("compliance_flags", {}),
-                "features": obs.get("features", []),
-                "attributes": obs.get("attributes", {}),
-                "image_url": obs.get("image_url"),
-                "source": {
-                    "catalog": os.path.splitext(os.path.basename(source_pdf))[0].title(),
-                    "pdf_file": os.path.basename(source_pdf),
-                    "spread_sheet": sheet_num
-                },
-                "updated_at": now
-            }
+        # 2. Rollup to Klass documents
+        klasses_in_batch = set(obs.get("klass_name", "General") for obs in observations if obs.get("klass_name"))
+        for k_name in klasses_in_batch:
+            slug = re.sub(r'[^a-z0-9]+', '-', k_name.lower()).strip('-')
+            k_obs = list(obs_col.find({"klass_name": k_name}))
+            total_obs = len(k_obs)
             
-            obs_col.update_one(
-                {"product_name": obs.get("product_name"), "source.pdf_file": os.path.basename(source_pdf)},
-                {"$set": obs_doc, "$setOnInsert": {"created_at": now}},
-                upsert=True
-            )
+            all_mats = sorted(list(set(m for o in k_obs for m in o.get("materials", []))))
             
-            # 2. Re-compute aggregate facet space for this Klass
-            all_klass_obs = list(obs_col.find({"klass_name": klass_name}))
-            
-            all_materials = set()
             all_sizes = set()
-            all_features = set()
-            all_images = []
+            for o in k_obs:
+                sz = o.get("attributes", {}).get("size")
+                if sz:
+                    all_sizes.add(sz)
+            all_sizes = sorted(list(all_sizes))
             
-            for o in all_klass_obs:
-                for m in o.get("materials", []):
-                    all_materials.add(m)
-                for s in o.get("attributes", {}).get("sizes", []):
-                    all_sizes.add(s)
-                for f in o.get("features", []):
-                    all_features.add(f)
-                img = o.get("image_url")
-                if img and img not in all_images:
-                    all_images.append(img)
-                    
+            hero_img = None
+            gallery_images = []
+            for o in k_obs:
+                img_url = o.get("image_url")
+                if img_url and img_url not in gallery_images:
+                    gallery_images.append(img_url)
+            if gallery_images:
+                hero_img = gallery_images[0]
+                
             klass_doc = {
-                "name": klass_name,
-                "hero_image": all_images[0] if all_images else None,
-                "gallery_images": all_images,
-                "total_observations": len(all_klass_obs),
+                "name": k_name,
+                "slug": slug,
+                "total_observations": total_obs,
+                "hero_image": hero_img,
+                "gallery_images": gallery_images,
                 "observed_facet_space": {
-                    "materials": sorted(list(all_materials)),
-                    "sizes": normalize_sizes(list(all_sizes)),
-                    "common_features": sorted(list(all_features))[:15]
+                    "materials": all_mats,
+                    "sizes": all_sizes
                 },
                 "updated_at": now
             }
             
             klass_col.update_one(
-                {"name": klass_name},
+                {"slug": slug},
                 {"$set": klass_doc, "$setOnInsert": {"created_at": now}},
                 upsert=True
             )
             
         print(f"  🍃 [MongoDB] Ingested {len(observations)} observations -> Updated '{KLASSES_COLL}' and '{OBSERVATIONS_COLL}'")
     except Exception as e:
-        print(f"  [!] MongoDB error: {e}")
+        print(f"  [!] MongoDB persistence error: {e}")
 
-def normalize_materials(materials_list):
-    """Normalize base polymers and isolate pure materials from marketing/compliance terms."""
-    if not materials_list:
-        return []
-        
-    known_polymers = {
-        "silicone": "Silicone",
-        "silicon": "Silicone",
-        "tpe": "TPE (Thermoplastic Elastomer)",
-        "pp": "Polypropylene (PP)",
-        "polypropylene": "Polypropylene (PP)",
-        "pvc": "Medical Grade PVC",
-        "polyvinyl": "Medical Grade PVC",
-        "pc": "Polycarbonate (PC)",
-        "polycarbonate": "Polycarbonate (PC)",
-        "neoprene": "Neoprene",
-        "polyethylene": "Polyethylene (PE)",
-        "pe": "Polyethylene (PE)",
-        "polyisoprene": "Polyisoprene",
-        "eva": "EVA",
-        "abs": "ABS Plastic"
-    }
+def extract_products_with_vision(image_pil, page_num):
+    """Direct single-pass Vision-Language extraction using Qwen3-VL on the rendered page image."""
+    # Convert PIL Image to Base64
+    buffered = io.BytesIO()
+    image_pil.save(buffered, format="JPEG", quality=90)
+    img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
     
-    clean_mats = []
-    for m in materials_list:
-        m_lower = m.lower()
-        matched = False
-        for k, standard_name in known_polymers.items():
-            if k in m_lower and "latex" not in m_lower and "dehp" not in m_lower:
-                clean_mats.append(standard_name)
-                matched = True
-                break
-        if not matched and "latex" not in m_lower and "free" not in m_lower and "sterile" not in m_lower:
-            clean_mats.append(m.strip())
-            
-    seen = set()
-    deduped = []
-    for mat in clean_mats:
-        if mat not in seen:
-            seen.add(mat)
-            deduped.append(mat)
-    return deduped
+    prompt = """You are an expert visual medical catalog parser.
+Look at this catalog page image and extract EVERY product box and table into clean JSON.
 
-def extract_facets_with_granite(page_text, page_num):
-    """Send OCR text to Granite 4.1 8B with compact matrix extraction, then explode variants in Python."""
-    prompt = f"""You are an expert medical catalog data extraction engine.
-Analyze the raw OCR text from page {page_num} of a medical & surgical consumables catalog.
-
-MISSION: Extract EVERY distinct product model series on the page as its OWN product entry in "products".
-A single page typically contains 3 to 5 separate product families (for example, a page may show 4 different mask models: e.g. LB3011, LB3012, LB3021, and LB3030).
-DO NOT FUSE DIFFERENT MODEL SERIES TOGETHER! Each distinct Catalog Number prefix / heading is its OWN product!
-
-CRITICAL RULES:
-1. SEPARATE PRODUCT HEADINGS: Each distinct model code (e.g. LB3011 PVC Free Mask vs LB3012 Upright Valve Mask vs LB3021 Soft Anesthesia Mask [PVC] vs LB3030 Silicone Mask [Silicone]) MUST be its OWN object in the "products" list.
-2. ACCURATE MATERIALS PER MODEL: Match the materials to that specific model (e.g. LB3021 is Medical Grade PVC, whereas LB3030 is 100% Silicone).
-3. ATOMIC VARIANTS: Put all sizes/SKUs matching that specific model into its 'variants' list.
-4. IGNORE SIDEBAR MARGIN TABS: Ignore vertical margin navigation tabs like "Wound Dressing", "Urology", "Others".
+RULES:
+1. IDENTIFY EACH PRODUCT BOX: Each distinct product heading and table (e.g. PVCFreeAnesthesiaMask, Soft Anesthesia Mask, Silicone Anesthesia Mask, Endoscope Mask, CPAP Mask) is its OWN item in the 'products' array.
+2. ACCURATE MATERIALS: Read the material directly from the product box description (e.g. PVC, Silicone, TPE).
+3. TABLE VARIANTS: For each product, extract all catalog numbers (Cat.No.) and sizes from its specific table into 'variants'.
+4. IGNORE MARGIN TABS: Ignore vertical navigation margin tabs (e.g. 'Wound Dressing', 'Urology').
 
 Output JSON format:
-{{
+{
   "products": [
-    {{
+    {
       "klass_name": "Anesthesia Face Mask",
       "product_name": "PVC Free Anesthesia Mask",
       "materials": ["TPE (Thermoplastic Elastomer)", "Polypropylene (PP)"],
-      "compliance_flags": {{"latex_free": true, "sterile": false}},
+      "compliance_flags": {"latex_free": true, "sterile": false},
       "variants": [
-        {{"cat_no": "LB301100", "size": "0#", "connector": "15mmOD"}},
-        {{"cat_no": "LB301102", "size": "2#", "connector": "22mmID"}}
+        {"cat_no": "LB301100", "size": "0#", "connector": "15mmOD"},
+        {"cat_no": "LB301102", "size": "2#", "connector": "22mmID"}
       ]
-    }},
-    {{
+    },
+    {
       "klass_name": "Anesthesia Face Mask",
       "product_name": "Soft Anesthesia Mask",
       "materials": ["Medical Grade PVC"],
-      "compliance_flags": {{"latex_free": true, "sterile": false}},
+      "compliance_flags": {"latex_free": true, "sterile": false},
       "variants": [
-        {{"cat_no": "LB302101", "size": "0#", "connector": "15mmOD"}},
-        {{"cat_no": "LB302103", "size": "2#", "connector": "22mmID"}}
+        {"cat_no": "LB302101", "size": "0#", "connector": "15mmOD"},
+        {"cat_no": "LB302103", "size": "2#", "connector": "22mmID"}
       ]
-    }},
-    {{
-      "klass_name": "Anesthesia Face Mask",
-      "product_name": "Silicone Anesthesia Mask (One-Piece)",
-      "materials": ["Silicone"],
-      "compliance_flags": {{"latex_free": true, "autoclavable": true}},
-      "variants": [
-        {{"cat_no": "LB303000", "size": "0#", "connector": "15mmOD"}},
-        {{"cat_no": "LB303002", "size": "2#", "connector": "15mmOD"}}
-      ]
-    }}
+    }
   ]
-}}
-
-OCR Text from Page {page_num}:
-\"\"\"
-{page_text}
-\"\"\"
-"""
+}"""
 
     payload = {
         "model": MODEL_NAME,
         "prompt": prompt,
+        "images": [img_b64],
         "format": "json",
         "stream": False,
         "keep_alive": "1h",
@@ -300,34 +263,23 @@ OCR Text from Page {page_num}:
     }
 
     try:
-        t0 = time.time()
         resp = requests.post(OLLAMA_URL, json=payload, stream=False, timeout=180)
-        dur = time.time() - t0
-        
         raw_response = resp.json().get("response", "").strip()
         
         data = []
         try:
             parsed = json.loads(raw_response)
-            if isinstance(parsed, list):
+            if isinstance(parsed, dict) and "products" in parsed:
+                data = parsed["products"]
+            elif isinstance(parsed, list):
                 data = parsed
-            elif isinstance(parsed, dict):
-                found_list = False
-                for val in parsed.values():
-                    if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict):
-                        data = val
-                        found_list = True
-                        break
-                if not found_list:
-                    data = [parsed]
-        except Exception:
+        except:
             match = re.search(r'\[.*\]', raw_response, re.DOTALL)
             if match:
                 data = json.loads(match.group(0))
             else:
                 return []
-        
-        # ⚡ Instant Python Cartesian Variant Explosion
+                
         atomic_observations = []
         for prod in data:
             if not isinstance(prod, dict):
@@ -340,8 +292,6 @@ OCR Text from Page {page_num}:
             desc = prod.get("description", "")
             
             variants = prod.get("variants", [])
-            
-            # If no explicit variants table was found, synthesize from attributes or single entity
             if not variants:
                 raw_sz = prod.get("attributes", {}).get("sizes", prod.get("sizes", []))
                 norm_sz = normalize_sizes(raw_sz)
@@ -356,19 +306,15 @@ OCR Text from Page {page_num}:
                 var_clean = {k: v for k, v in var.items() if v and str(v).lower() not in ["not specified", "null", "none", "n/a", "color"]}
                 var_clean.pop("color", None)
                 
-                # Normalize size attribute in variant
                 if "size" in var_clean:
                     sz_norm = normalize_sizes(var_clean["size"])
                     if sz_norm:
                         var_clean["size"] = sz_norm[0]
                         
                 sku = var_clean.pop("cat_no", None)
-                sku_tag = f" [{sku}]" if sku else ""
-                size_label = f" (Size {var_clean['size']})" if "size" in var_clean else ""
-                
                 obs_doc = {
                     "klass_name": k_name,
-                    "product_name": f"{base_name}{sku_tag}{size_label}",
+                    "product_name": base_name,
                     "cat_no": sku,
                     "description": desc,
                     "materials": mats,
@@ -377,7 +323,6 @@ OCR Text from Page {page_num}:
                 }
                 atomic_observations.append(obs_doc)
                 
-        # Sort variants deterministically: by Klass, then natural size rank, then SKU
         def size_rank(doc):
             sz = str(doc.get("attributes", {}).get("size", ""))
             order = ["000#", "00#", "0#", "1#", "2#", "3#", "4#", "5#", "6#", "XS", "S", "M", "L", "XL", "XXL"]
@@ -388,59 +333,46 @@ OCR Text from Page {page_num}:
         atomic_observations.sort(key=lambda d: (d.get("klass_name", ""), d.get("cat_no") or "", size_rank(d)))
         return atomic_observations
     except Exception as e:
-        print(f"  [!] Extraction error on page {page_num}: {e}")
+        print(f"  [!] Vision extraction error on page {page_num}: {e}")
         return []
 
-def process_catalog(pdf_path, start_page=1, end_page=48, output_file="extracted_products.json", images_dir="assets/catalog_pages"):
+def process_catalog(pdf_path, start_page=4, end_page=48, output_file="extracted_products.json", images_dir="assets/catalog_pages"):
     print("\n" + "="*60)
-    print(f"⚡ INFINITY CATALOG ENRICHMENT ENGINE (Klasses, Observations, & Images)")
+    print(f"⚡ INFINITY CATALOG VISION ENGINE (Direct Qwen3-VL Single Pass)")
     print(f"   Target: {pdf_path}")
     print(f"   Model : {MODEL_NAME}")
     print(f"   Pages : {start_page} -> {end_page}")
     print(f"   DB    : {DB_NAME} -> collections: ['{CATALOGS_COLL}', '{KLASSES_COLL}', '{OBSERVATIONS_COLL}']")
     print("="*60)
     
-    t_start = time.time()
-    doc = pdfium.PdfDocument(pdf_path)
-    ocr = RapidOCR()
     os.makedirs(images_dir, exist_ok=True)
     
+    doc = pdfium.PdfDocument(pdf_path)
     all_extracted = []
+    t_start = time.time()
     
-    for p_idx in range(start_page - 1, min(end_page, len(doc))):
-        sheet_num = p_idx + 1
+    for sheet_idx in range(start_page - 1, min(end_page, len(doc))):
+        sheet_num = sheet_idx + 1
         page_t0 = time.time()
-        print(f"\n📄 [PDF SPREAD {sheet_num:02d}/{len(doc):02d}] Ingestion started...")
+        print(f"\n📄 [PDF SPREAD {sheet_num:02d}/{len(doc):02d}] Vision Ingestion started...")
         
-        page = doc.get_page(p_idx)
-        pil_img = page.render(scale=2.0).to_pil()
-        w, h = pil_img.size
+        page = doc[sheet_idx]
+        pil_image = page.render(scale=2).to_pil()
         
-        half_w = int(w * 0.5)
+        w, h = pil_image.size
         pages_in_spread = [
-            ("Left_Page", pil_img.crop((0, 0, half_w, h))),
-            ("Right_Page", pil_img.crop((half_w, 0, w, h)))
+            ("Left_Page", pil_image.crop((0, 0, w // 2, h))),
+            ("Right_Page", pil_image.crop((w // 2, 0, w, h)))
         ]
         
         spread_products = []
-        
         for side_name, side_img in pages_in_spread:
-            # Save visual page asset for UI & persistence
             page_filename = f"spread_{sheet_num:02d}_{side_name.lower()}.jpg"
             page_img_path = os.path.join(images_dir, page_filename)
             side_img.save(page_img_path)
             
-            img_np = np.array(side_img)
-            ocr_res, _ = ocr(img_np)
-            if not ocr_res:
-                continue
-                
-            text = "\n".join([line[1] for line in ocr_res])
-            if len(text.strip()) < 30:
-                continue
-                
-            print(f"\n  ├─ Ingesting [{side_name}] ({len(text)} OCR chars)...", end="", flush=True)
-            products = extract_facets_with_granite(text, sheet_num)
+            print(f"  ├─ 👁️ [Qwen3-VL Vision] Ingesting [{side_name}]...", end="", flush=True)
+            products = extract_products_with_vision(side_img, sheet_num)
             print(f" -> Found {len(products)} products")
             
             for item in products:
@@ -448,20 +380,18 @@ def process_catalog(pdf_path, start_page=1, end_page=48, output_file="extracted_
                 spread_products.append(item)
                 
                 mats = ", ".join(item.get("materials", [])) or "N/A"
-                sizes = ", ".join(item.get("attributes", {}).get("sizes", [])) or "N/A"
+                sizes = item.get("attributes", {}).get("size") or "N/A"
                 print(f"      • 📦 [{item.get('klass_name', 'General')}] {item.get('product_name')}")
-                print(f"           ↳ Mats: {mats} | Sizes: {sizes}")
+                print(f"           ↳ Mats: {mats} | Size: {sizes}")
                 
         all_extracted.extend(spread_products)
-        print(f"\n  └─ Ingested {len(spread_products)} total products from Spread {sheet_num} in {time.time()-page_t0:.2f}s")
+        print(f"  └─ Ingested {len(spread_products)} total products from Spread {sheet_num} in {time.time()-page_t0:.2f}s")
         
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(all_extracted, f, indent=2, ensure_ascii=False)
         
-    # Persist and auto-rollup into Klass ontology
     persist_and_rollup_to_mongodb(all_extracted, source_pdf=pdf_path)
     
-    # Register source catalog metadata with exact product page bounds and Klass histogram
     import collections
     klass_counts = collections.Counter([item.get("klass_name", "General") for item in all_extracted])
     register_catalog_source(pdf_path, len(doc), len(all_extracted), dict(klass_counts), start_page=start_page, end_page=end_page)
@@ -475,7 +405,7 @@ def process_catalog(pdf_path, start_page=1, end_page=48, output_file="extracted_
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Extract structured products from PDF catalog using OCR + Granite")
+    parser = argparse.ArgumentParser(description="Extract structured products from PDF catalog using Qwen3-VL Vision")
     parser.add_argument("--pdf", default="foyomed catalogue.pdf", help="Path to PDF catalog")
     parser.add_argument("--start", type=int, default=4, help="Start page number (1-indexed, products start on 4)")
     parser.add_argument("--end", type=int, default=48, help="End page number (1-indexed)")
