@@ -277,9 +277,10 @@ def worker_loop():
             print(f"   ↳ Extracted {len(extracted_products)} products in {dur:.2f}s:")
             for p in extracted_products:
                 mats = ", ".join(p.get("materials", [])) or "N/A"
-                sz = p.get("attributes", {}).get("size") or "N/A"
+                attrs = p.get("attributes", {})
+                attr_str = " | ".join([f"{k.replace('_', ' ').title()}: {v}" for k, v in attrs.items()]) if attrs else "None"
                 print(f"       • 📦 [{p.get('klass_name')}] {p.get('product_name')}")
-                print(f"            ↳ Mats: {mats} | Size: {sz}")
+                print(f"            ↳ Materials: {mats} | Attributes: {attr_str}")
                 
             submit_resp = requests.post(
                 f"{SERVER_PRIME_URL}/api/submit-work",
