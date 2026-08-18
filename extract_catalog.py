@@ -2,17 +2,17 @@ import os
 import sys
 import json
 import time
-import base64
-import io
 import re
 import datetime
 import requests
 import pypdfium2 as pdfium
+import numpy as np
 from PIL import Image
 from pymongo import MongoClient
+from rapidocr_onnxruntime import RapidOCR
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "qwen3-vl:latest"
+MODEL_NAME = "qwen3.5:9b"
 MONGO_URI = "mongodb://localhost:27017/"
 DB_NAME = "infinityproduct_dev"
 OBSERVATIONS_COLL = "observations"
@@ -207,52 +207,55 @@ def persist_and_rollup_to_mongodb(observations, source_pdf="foyomed catalogue.pd
     except Exception as e:
         print(f"  [!] MongoDB persistence error: {e}")
 
-def extract_products_with_vision(image_pil, page_num):
-    """Direct single-pass Vision-Language extraction using Qwen3-VL on the rendered page image."""
-    # Convert PIL Image to Base64
-    buffered = io.BytesIO()
-    image_pil.save(buffered, format="JPEG", quality=90)
-    img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-    
-    prompt = """You are an expert visual medical catalog parser.
-Look at this catalog page image and extract EVERY product box and table into clean JSON.
+def extract_products_with_llm(page_text, page_num):
+    """Direct fast extraction using Qwen 3.5 9B with strict model separation."""
+    prompt = f"""You are an expert medical catalog data extraction engine.
+Analyze the raw OCR text from page {page_num} of a medical catalog.
 
-RULES:
-1. IDENTIFY EACH PRODUCT BOX: Each distinct product heading and table (e.g. PVCFreeAnesthesiaMask, Soft Anesthesia Mask, Silicone Anesthesia Mask, Endoscope Mask, CPAP Mask) is its OWN item in the 'products' array.
-2. ACCURATE MATERIALS: Read the material directly from the product box description (e.g. PVC, Silicone, TPE).
-3. TABLE VARIANTS: For each product, extract all catalog numbers (Cat.No.) and sizes from its specific table into 'variants'.
-4. IGNORE MARGIN TABS: Ignore vertical navigation margin tabs (e.g. 'Wound Dressing', 'Urology').
+MISSION: Extract EVERY distinct product model series on the page as its OWN product entry in "products".
+A single page typically contains 2 to 4 separate product models (e.g. LB3011 PVC Free Mask vs LB3012 Upright Valve Mask vs LB3021 Soft Mask vs LB3030 Silicone Mask).
+DO NOT FUSE DIFFERENT MODELS TOGETHER! Each distinct Catalog Number prefix / model heading is its OWN product!
+
+CRITICAL RULES:
+1. SEPARATE PRODUCT HEADINGS: Each distinct model code (e.g. LB3011 vs LB3012 vs LB3021 vs LB3030) MUST be its OWN object in the "products" list.
+2. ACCURATE MATERIALS PER MODEL: Match the materials to that specific model (e.g. LB3021 is Medical Grade PVC, whereas LB3030 is 100% Silicone).
+3. ATOMIC VARIANTS: Put all sizes/SKUs matching that specific model into its 'variants' list.
 
 Output JSON format:
-{
+{{
   "products": [
-    {
+    {{
       "klass_name": "Anesthesia Face Mask",
       "product_name": "PVC Free Anesthesia Mask",
       "materials": ["TPE (Thermoplastic Elastomer)", "Polypropylene (PP)"],
-      "compliance_flags": {"latex_free": true, "sterile": false},
+      "compliance_flags": {{"latex_free": true, "sterile": false}},
       "variants": [
-        {"cat_no": "LB301100", "size": "0#", "connector": "15mmOD"},
-        {"cat_no": "LB301102", "size": "2#", "connector": "22mmID"}
+        {{"cat_no": "LB301100", "size": "0#", "connector": "15mmOD"}},
+        {{"cat_no": "LB301102", "size": "2#", "connector": "22mmID"}}
       ]
-    },
-    {
+    }},
+    {{
       "klass_name": "Anesthesia Face Mask",
       "product_name": "Soft Anesthesia Mask",
       "materials": ["Medical Grade PVC"],
-      "compliance_flags": {"latex_free": true, "sterile": false},
+      "compliance_flags": {{"latex_free": true, "sterile": false}},
       "variants": [
-        {"cat_no": "LB302101", "size": "0#", "connector": "15mmOD"},
-        {"cat_no": "LB302103", "size": "2#", "connector": "22mmID"}
+        {{"cat_no": "LB302101", "size": "0#", "connector": "15mmOD"}},
+        {{"cat_no": "LB302103", "size": "2#", "connector": "22mmID"}}
       ]
-    }
+    }}
   ]
-}"""
+}}
+
+OCR Text from Page {page_num}:
+\"\"\"
+{page_text}
+\"\"\"
+"""
 
     payload = {
         "model": MODEL_NAME,
         "prompt": prompt,
-        "images": [img_b64],
         "format": "json",
         "stream": False,
         "keep_alive": "1h",
@@ -263,7 +266,7 @@ Output JSON format:
     }
 
     try:
-        resp = requests.post(OLLAMA_URL, json=payload, stream=False, timeout=180)
+        resp = requests.post(OLLAMA_URL, json=payload, stream=False, timeout=60)
         raw_response = resp.json().get("response", "").strip()
         
         data = []
@@ -312,9 +315,12 @@ Output JSON format:
                         var_clean["size"] = sz_norm[0]
                         
                 sku = var_clean.pop("cat_no", None)
+                sku_tag = f" [{sku}]" if sku else ""
+                size_label = f" (Size {var_clean['size']})" if "size" in var_clean else ""
+                
                 obs_doc = {
                     "klass_name": k_name,
-                    "product_name": base_name,
+                    "product_name": f"{base_name}{sku_tag}{size_label}",
                     "cat_no": sku,
                     "description": desc,
                     "materials": mats,
@@ -333,12 +339,12 @@ Output JSON format:
         atomic_observations.sort(key=lambda d: (d.get("klass_name", ""), d.get("cat_no") or "", size_rank(d)))
         return atomic_observations
     except Exception as e:
-        print(f"  [!] Vision extraction error on page {page_num}: {e}")
+        print(f"  [!] LLM extraction error on page {page_num}: {e}")
         return []
 
 def process_catalog(pdf_path, start_page=4, end_page=48, output_file="extracted_products.json", images_dir="assets/catalog_pages"):
     print("\n" + "="*60)
-    print(f"⚡ INFINITY CATALOG VISION ENGINE (Direct Qwen3-VL Single Pass)")
+    print(f"⚡ INFINITY CATALOG REFINERY ENGINE (RapidOCR + Qwen 3.5 9B)")
     print(f"   Target: {pdf_path}")
     print(f"   Model : {MODEL_NAME}")
     print(f"   Pages : {start_page} -> {end_page}")
@@ -346,7 +352,7 @@ def process_catalog(pdf_path, start_page=4, end_page=48, output_file="extracted_
     print("="*60)
     
     os.makedirs(images_dir, exist_ok=True)
-    
+    ocr = RapidOCR()
     doc = pdfium.PdfDocument(pdf_path)
     all_extracted = []
     t_start = time.time()
@@ -354,13 +360,13 @@ def process_catalog(pdf_path, start_page=4, end_page=48, output_file="extracted_
     for sheet_idx in range(start_page - 1, min(end_page, len(doc))):
         sheet_num = sheet_idx + 1
         page_t0 = time.time()
-        print(f"\n📄 [PDF SPREAD {sheet_num:02d}/{len(doc):02d}] Vision Ingestion started...")
+        print(f"\n📄 [PDF SPREAD {sheet_num:02d}/{len(doc):02d}] Ingestion started...")
         
         page = doc[sheet_idx]
         pil_image = page.render(scale=2).to_pil()
         
         w, h = pil_image.size
-        # Slices off the vertical side margin tabs (rightmost ~7% of spread) destructively
+        # Slices off the vertical side margin tabs destructively (rightmost 7%)
         left_page_img = pil_image.crop((0, 0, w // 2, h))
         right_page_img = pil_image.crop((w // 2, 0, int(w * 0.93), h))
         
@@ -375,8 +381,17 @@ def process_catalog(pdf_path, start_page=4, end_page=48, output_file="extracted_
             page_img_path = os.path.join(images_dir, page_filename)
             side_img.save(page_img_path)
             
-            print(f"  ├─ 👁️ [Qwen3-VL Vision] Ingesting [{side_name}]...", end="", flush=True)
-            products = extract_products_with_vision(side_img, sheet_num)
+            img_np = np.array(side_img)
+            ocr_res, _ = ocr(img_np)
+            if not ocr_res:
+                continue
+                
+            text = "\n".join([line[1] for line in ocr_res])
+            if len(text.strip()) < 30:
+                continue
+                
+            print(f"  ├─ ⚡ [RapidOCR + {MODEL_NAME}] Ingesting [{side_name}] ({len(text)} chars)...", end="", flush=True)
+            products = extract_products_with_llm(text, sheet_num)
             print(f" -> Found {len(products)} products")
             
             for item in products:
@@ -409,7 +424,7 @@ def process_catalog(pdf_path, start_page=4, end_page=48, output_file="extracted_
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Extract structured products from PDF catalog using Qwen3-VL Vision")
+    parser = argparse.ArgumentParser(description="Extract structured products from PDF catalog using RapidOCR + Qwen 3.5 9B")
     parser.add_argument("--pdf", default="foyomed catalogue.pdf", help="Path to PDF catalog")
     parser.add_argument("--start", type=int, default=4, help="Start page number (1-indexed, products start on 4)")
     parser.add_argument("--end", type=int, default=48, help="End page number (1-indexed)")
