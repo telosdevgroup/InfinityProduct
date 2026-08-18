@@ -176,7 +176,7 @@ from fastapi.responses import HTMLResponse
 
 @app.get("/klass/{slug}", response_class=HTMLResponse)
 def view_klass_diagnostic(slug: str):
-    """Diagnostic Explorer for a Klass: clean business light theme with evidence lineage."""
+    """Diagnostic Explorer: High-density Variant Matrix and Family Tree, eliminating wall-of-text repetition."""
     klass = klass_col.find_one({"slug": slug})
     if not klass:
         klass = klass_col.find_one({"name": {"$regex": f"^{slug.replace('-', ' ')}$", "$options": "i"}})
@@ -185,30 +185,65 @@ def view_klass_diagnostic(slug: str):
     observations = list(obs_col.find({"klass_name": {"$regex": f"^{k_name}$", "$options": "i"}}))
     
     observed_mats = sorted(list(set(m for o in observations for m in o.get("materials", []))))
-    observed_sizes = sorted(list(set(o.get("attributes", {}).get("size") for o in observations if o.get("attributes", {}).get("size"))))
     
-    obs_cards = ""
+    # Group observations by Model Series (e.g. "LB5110 Uncuffed", "LB5120 Cuffed", "LB5130 Reinforced")
+    families = {}
     for o in observations:
-        mats_badge = " ".join([f'<a href="/material/{m.lower()}" style="background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:12px;font-weight:600;margin-right:4px;">{m}</a>' for m in o.get('materials', [])]) or '<span style="color:#94a3b8;">None specified</span>'
-        attrs = o.get("attributes", {})
-        attr_rows = "".join([f"<tr><td style='color:#64748b;padding:4px 8px;border-bottom:1px solid #f1f5f9;width:35%;'>{k.replace('_', ' ').title()}</td><td style='color:#1e293b;padding:4px 8px;border-bottom:1px solid #f1f5f9;'><b>{v}</b></td></tr>" for k, v in attrs.items()])
+        p_name = o.get("product_name", "")
+        # Extract clean family prefix
+        family_name = p_name.split("[")[0].strip() if "[" in p_name else p_name
+        family_name = family_name.split("(Size")[0].strip()
+        families.setdefault(family_name, []).append(o)
         
-        obs_cards += f"""
-        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:6px;padding:14px;margin-bottom:12px;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
-            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #f1f5f9;padding-bottom:8px;">
-                <h4 style="margin:0;color:#0f172a;font-size:14px;font-weight:700;">{o.get('product_name')}</h4>
-                <span style="font-size:12px;color:#475569;">SKU: <code style="background:#f8fafc;border:1px solid #e2e8f0;padding:2px 6px;border-radius:4px;color:#0f766e;font-weight:600;">{o.get('cat_no') or 'N/A'}</code></span>
+    family_sections = ""
+    for fam_name, obs_list in sorted(families.items()):
+        # Extract unique materials for this family
+        fam_mats = sorted(list(set(m for o in obs_list for m in o.get("materials", []))))
+        mats_badge = " ".join([f'<a href="/material/{m.lower()}" style="background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;padding:2px 8px;border-radius:4px;text-decoration:none;font-size:11px;font-weight:600;margin-right:4px;">{m}</a>' for m in fam_mats]) or '<span style="color:#94a3b8;font-size:12px;">None</span>'
+        
+        # Build compact variant rows
+        rows = ""
+        # Sort by size or SKU
+        sorted_obs = sorted(obs_list, key=lambda x: str(x.get("attributes", {}).get("size") or x.get("cat_no") or ""))
+        for o in sorted_obs:
+            sku = o.get("cat_no") or "N/A"
+            size = o.get("attributes", {}).get("size") or "—"
+            other_attrs = {k: v for k, v in o.get("attributes", {}).items() if k != "size"}
+            attr_summary = ", ".join([f"{k}: {v}" for k, v in other_attrs.items()]) if other_attrs else "—"
+            
+            rows += f"""
+            <tr style="border-bottom:1px solid #f1f5f9;font-size:12px;">
+                <td style="padding:6px 12px;font-family:monospace;font-weight:700;color:#0f766e;">{sku}</td>
+                <td style="padding:6px 12px;font-weight:600;color:#0f172a;">{size}</td>
+                <td style="padding:6px 12px;color:#64748b;">{attr_summary}</td>
+                <td style="padding:6px 12px;color:#94a3b8;font-size:11px;text-align:right;">Spread {o.get('spread_num', '?')}</td>
+            </tr>
+            """
+            
+        family_sections += f"""
+        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,0.02);">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e2e8f0;padding-bottom:10px;margin-bottom:12px;">
+                <div>
+                    <h3 style="margin:0;font-size:15px;color:#0f172a;font-weight:700;">{fam_name}</h3>
+                    <div style="margin-top:4px;font-size:12px;color:#64748b;">Materials: {mats_badge}</div>
+                </div>
+                <span style="background:#f1f5f9;border:1px solid #cbd5e1;color:#475569;font-size:12px;font-weight:700;padding:3px 8px;border-radius:4px;">
+                    {len(obs_list)} sizes / SKUs
+                </span>
             </div>
-            <div style="margin:10px 0;font-size:13px;color:#334155;">
-                <b style="color:#64748b;">Materials:</b> {mats_badge}
-            </div>
-            <table style="width:100%;font-size:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;border-collapse:collapse;margin-top:6px;">
-                {attr_rows or "<tr><td style='padding:6px;color:#94a3b8;'>No extra attributes</td></tr>"}
+            <table style="width:100%;border-collapse:collapse;text-align:left;">
+                <thead>
+                    <tr style="background:#f8fafc;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #e2e8f0;">
+                        <th style="padding:6px 12px;">Catalog SKU</th>
+                        <th style="padding:6px 12px;">Observed Size</th>
+                        <th style="padding:6px 12px;">Features / Attributes</th>
+                        <th style="padding:6px 12px;text-align:right;">Source</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
             </table>
-            <div style="margin-top:10px;font-size:11px;color:#64748b;display:flex;justify-content:space-between;">
-                <span>Source: <b style="color:#475569;">{o.get('source_catalog', 'foyomed catalogue.pdf')}</b> (Spread {o.get('spread_num', '?')})</span>
-                <span>Ingested: {str(o.get('ingested_at', ''))[:19]}</span>
-            </div>
         </div>
         """
 
@@ -259,9 +294,9 @@ def view_klass_diagnostic(slug: str):
             </div>
 
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <h3 style="color:#334155;margin:0;font-size:16px;">Evidence Lineage ({len(observations)} SKU Observations)</h3>
+                <h3 style="color:#334155;margin:0;font-size:16px;">Manufactured Model Series & Size Matrix</h3>
             </div>
-            {obs_cards or '<p style="color:#64748b;">No observations found for this Klass.</p>'}
+            {family_sections or '<p style="color:#64748b;">No observations found for this Klass.</p>'}
         </div>
     </body>
     </html>
