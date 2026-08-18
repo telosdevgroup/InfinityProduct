@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import base64
 import socket
 import datetime
 import uvicorn
@@ -109,10 +110,9 @@ def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int =
 
 @app.get("/api/get-work")
 def get_work(worker: str = "anonymous_worker"):
-    """DUMB worker asks for work. Server Prime finds and locks an atomic task."""
+    """DUMB worker asks for work. Server Prime finds and locks an atomic task, sending image bytes directly."""
     now = datetime.datetime.now(datetime.timezone.utc)
     
-    # Atomic claim
     task = tasks_col.find_one_and_update(
         {"status": "pending"},
         {"$set": {"status": "processing", "worker_id": worker, "claimed_at": now}},
@@ -122,12 +122,17 @@ def get_work(worker: str = "anonymous_worker"):
     if not task:
         return {"has_work": False}
         
+    img_b64 = None
+    if os.path.exists(task["image_path"]):
+        with open(task["image_path"], "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode("utf-8")
+            
     return {
         "has_work": True,
         "task_id": task["task_id"],
         "action": task["action"],
         "data": {
-            "image_path": task["image_path"],
+            "image_b64": img_b64,
             "spread_num": task["spread_num"],
             "side": task["side"],
             "catalog_file": task["catalog_file"]

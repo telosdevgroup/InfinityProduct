@@ -98,12 +98,22 @@ def normalize_materials(materials_list):
             deduped.append(c)
     return deduped
 
-def extract_products_from_image(image_path, spread_num):
-    """Run OCR on image, send text to Ollama, explode variants."""
-    if not os.path.exists(image_path):
+import base64
+import io
+
+def extract_products_from_image(image_data, spread_num):
+    """Run OCR on image (base64 or local path), send text to Granite, explode variants."""
+    pil_img = None
+    if isinstance(image_data, str) and len(image_data) > 300:
+        # Base64 image payload from Server Prime
+        img_bytes = base64.b64decode(image_data)
+        pil_img = Image.open(io.BytesIO(img_bytes))
+    elif isinstance(image_data, str) and os.path.exists(image_data):
+        pil_img = Image.open(image_data)
+        
+    if not pil_img:
         return []
         
-    pil_img = Image.open(image_path)
     img_np = np.array(pil_img)
     ocr_res, _ = ocr(img_np)
     if not ocr_res:
@@ -238,10 +248,11 @@ def worker_loop():
                 
             task_id = job["task_id"]
             data = job["data"]
-            print(f"\n⚡ [Work Claimed] Task: {task_id} | Image: {data['image_path']}")
+            print(f"\n⚡ [Work Claimed] Task: {task_id} | Spread {data['spread_num']} ({data['side']})")
             
             t0 = time.time()
-            extracted_products = extract_products_from_image(data["image_path"], data["spread_num"])
+            img_payload = data.get("image_b64") or data.get("image_path")
+            extracted_products = extract_products_from_image(img_payload, data["spread_num"])
             dur = time.time() - t0
             
             print(f"   ↳ Extracted {len(extracted_products)} products in {dur:.2f}s:")
