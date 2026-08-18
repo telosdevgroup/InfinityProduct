@@ -172,12 +172,156 @@ async def submit_work(request: Request):
             upsert=True
         )
    from facet_bag_synthesizer import build_facet_bag_for_klass
-
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+
+if os.path.exists("assets"):
+    app.mount("/assets", StaticFiles(directory="assets"), name="assets")
+
+BASE_CSS = """
+    * { box-sizing: border-box; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background: #f8fafc;
+        color: #0f172a;
+        margin: 0;
+        padding: 48px 24px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+    }
+    .container {
+        max-width: 680px;
+        margin: 0 auto;
+    }
+    .card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 36px 32px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+    }
+    h1 {
+        margin: 0 0 28px 0;
+        font-size: 24px;
+        font-weight: 800;
+        color: #0f172a;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .hero-img {
+        width: 100%;
+        max-height: 260px;
+        object-fit: contain;
+        background: #f8fafc;
+        border: 1px solid #f1f5f9;
+        border-radius: 8px;
+        margin-bottom: 28px;
+        padding: 12px;
+    }
+    .facet-group {
+        margin-bottom: 24px;
+    }
+    .facet-group:last-child {
+        margin-bottom: 0;
+    }
+    .facet-label {
+        font-size: 13px;
+        font-weight: 700;
+        color: #64748b;
+        margin-bottom: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .chip-bag {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .chip {
+        display: inline-flex;
+        align-items: center;
+        background: #f1f5f9;
+        color: #0369a1;
+        border: 1px solid #e2e8f0;
+        padding: 6px 14px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.12s ease;
+    }
+    .chip:hover {
+        background: #e0f2fe;
+        border-color: #bae6fd;
+        color: #0284c7;
+        transform: translateY(-1px);
+    }
+    .klass-chip {
+        display: inline-flex;
+        align-items: center;
+        background: #f8fafc;
+        color: #0f172a;
+        border: 1px solid #e2e8f0;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.12s ease;
+    }
+    .klass-chip:hover {
+        background: #f1f5f9;
+        border-color: #cbd5e1;
+        color: #0284c7;
+        transform: translateY(-1px);
+    }
+    .top-nav {
+        margin-bottom: 20px;
+        font-size: 13px;
+    }
+    .top-nav a {
+        color: #64748b;
+        text-decoration: none;
+        font-weight: 600;
+    }
+    .top-nav a:hover {
+        color: #0284c7;
+    }
+"""
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    """Generic root directory of all Klasses in the corpus."""
+    klasses = list(klass_col.find({}).sort("name", 1))
+    chips = "".join([f'<a href="/klass/{k["slug"]}" class="klass-chip">{k["name"]}</a>' for k in klasses])
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Infinity Product</title>
+        <meta charset="utf-8">
+        <style>{BASE_CSS}</style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="card">
+                <h1>Infinity Product</h1>
+                <div class="facet-label">Observed Klasses ({len(klasses)})</div>
+                <div class="chip-bag">
+                    {chips}
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
+
 
 @app.get("/klass/{slug}", response_class=HTMLResponse)
 def view_klass_facet_bag(slug: str):
-    """The FacetBag Plant: A clean, direct visualization of the Klass and its configuration space."""
+    """Pure Generic Klass View: Name -> Image -> Bag of Labeled Chips."""
     klass = klass_col.find_one({"slug": slug})
     if not klass:
         klass = klass_col.find_one({"name": {"$regex": f"^{slug.replace('-', ' ')}$", "$options": "i"}})
@@ -188,31 +332,33 @@ def view_klass_facet_bag(slug: str):
     k_name = klass["name"]
     facet_bag = klass.get("facet_bag")
     
-    # If not yet generated, build on the fly
+    # Auto-synthesize on the fly if missing
     if not facet_bag:
         obs_list = list(obs_col.find({"klass_name": {"$regex": f"^{k_name}$", "$options": "i"}}))
         facet_bag = build_facet_bag_for_klass(k_name, obs_list)
         klass_col.update_one({"_id": klass["_id"]}, {"$set": {"facet_bag": facet_bag}})
 
-    obs_count = klass.get("total_observations") or obs_col.count_documents({"klass_name": {"$regex": f"^{k_name}$", "$options": "i"}})
+    # Find hero image from first observation if available
+    first_obs = obs_col.find_one({"klass_name": {"$regex": f"^{k_name}$", "$options": "i"}})
+    img_html = ""
+    if first_obs:
+        spread_num = first_obs.get("spread_num")
+        side = first_obs.get("side", "left")
+        if spread_num:
+            img_path = f"/assets/catalog_pages/spread_{spread_num:02d}_{side}.jpg"
+            img_html = f'<img src="{img_path}" class="hero-img" alt="{k_name}" />'
 
-    # Render each Facet cleanly
+    # Render labeled chip rows
     facet_sections = ""
     for facet_name, values in facet_bag.items():
-        pills = ""
-        for v in values:
-            v_encoded = str(v).replace("/", "-").replace(" ", "-")
-            pills += f"""
-            <a href="/facet/{facet_name}/{v_encoded}" class="facet-pill">
-                {v}
-            </a>
-            """
-            
+        if not values:
+            continue
+        pills = "".join([f'<a href="/facet/{facet_name}/{str(v).replace("/", "-").replace(" ", "-")}" class="chip">{v}</a>' for v in values])
         facet_sections += f"""
         <div class="facet-group">
             <div class="facet-label">{facet_name}</div>
-            <div class="facet-values">
-                {pills or '<span style="color:#94a3b8;font-size:13px;">None</span>'}
+            <div class="chip-bag">
+                {pills}
             </div>
         </div>
         """
@@ -223,101 +369,17 @@ def view_klass_facet_bag(slug: str):
     <head>
         <title>{k_name} — Infinity Product</title>
         <meta charset="utf-8">
-        <style>
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                background: #f8fafc;
-                color: #0f172a;
-                margin: 0;
-                padding: 40px 20px;
-                line-height: 1.5;
-            }}
-            .container {{
-                max-width: 780px;
-                margin: 0 auto;
-            }}
-            .plant-card {{
-                background: #ffffff;
-                border: 1px solid #e2e8f0;
-                border-radius: 10px;
-                padding: 32px;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.03);
-            }}
-            .header {{
-                display: flex;
-                justify-content: space-between;
-                align-items: baseline;
-                border-bottom: 2px solid #f1f5f9;
-                padding-bottom: 16px;
-                margin-bottom: 24px;
-            }}
-            h1 {{
-                margin: 0;
-                font-size: 26px;
-                font-weight: 700;
-                color: #0f172a;
-                letter-spacing: -0.3px;
-            }}
-            .obs-meta {{
-                font-size: 13px;
-                color: #64748b;
-                font-weight: 500;
-            }}
-            .facet-group {{
-                margin-bottom: 22px;
-            }}
-            .facet-label {{
-                font-size: 13px;
-                font-weight: 700;
-                color: #475569;
-                text-transform: uppercase;
-                letter-spacing: 0.6px;
-                margin-bottom: 8px;
-            }}
-            .facet-values {{
-                display: flex;
-                flex-wrap: wrap;
-                gap: 8px;
-            }}
-            .facet-pill {{
-                background: #f1f5f9;
-                color: #0369a1;
-                border: 1px solid #e2e8f0;
-                padding: 5px 12px;
-                border-radius: 6px;
-                font-size: 13px;
-                font-weight: 600;
-                text-decoration: none;
-                transition: all 0.15s ease;
-            }}
-            .facet-pill:hover {{
-                background: #e0f2fe;
-                border-color: #bae6fd;
-                color: #0284c7;
-            }}
-            .nav-link {{
-                color: #0284c7;
-                text-decoration: none;
-                font-size: 13px;
-                font-weight: 600;
-            }}
-            .nav-link:hover {{
-                text-decoration: underline;
-            }}
-        </style>
+        <style>{BASE_CSS}</style>
     </head>
     <body>
         <div class="container">
-            <div style="margin-bottom: 16px;">
-                <a href="/facet/Material/Medical-Grade-PVC" class="nav-link">← Inverted Explorer: Medical Grade PVC</a>
+            <div class="top-nav">
+                <a href="/">← All Klasses</a>
             </div>
             
-            <div class="plant-card">
-                <div class="header">
-                    <h1>{k_name}</h1>
-                    <div class="obs-meta">Synthesized from {obs_count} observations</div>
-                </div>
-
+            <div class="card">
+                <h1>{k_name}</h1>
+                {img_html}
                 {facet_sections}
             </div>
         </div>
@@ -329,10 +391,10 @@ def view_klass_facet_bag(slug: str):
 
 @app.get("/facet/{facet_name}/{facet_val}", response_class=HTMLResponse)
 def view_inverted_facet(facet_name: str, facet_val: str):
-    """Inverted Destination Explorer: View every Klass in the universe sharing this exact facet value."""
+    """Pure Generic Inverted View: Value -> Observed on: -> Bag of Klass Chips."""
     clean_val = facet_val.replace("-", " ")
     
-    # Query Klasses matching this facet in their FacetBag
+    # Find all Klasses that share this facet value in their FacetBag
     query_key = f"facet_bag.{facet_name}"
     klasses = list(klass_col.find({
         "$or": [
@@ -341,100 +403,41 @@ def view_inverted_facet(facet_name: str, facet_val: str):
         ]
     }).sort("name", 1))
 
-    # Also check if query is material
     if not klasses and facet_name.lower() == "material":
         klasses = list(klass_col.find({"observed_facet_space.materials": {"$regex": f"^{clean_val}$", "$options": "i"}}).sort("name", 1))
 
-    klass_cards = ""
-    for k in klasses:
-        k_name = k["name"]
-        k_slug = k["slug"]
-        bag = k.get("facet_bag", {})
-        obs_count = k.get("total_observations", 0)
-        
-        other_facets = " • ".join([f"{fn}: {len(fv)}" for fn, fv in bag.items() if fn != facet_name])
-        
-        klass_cards += f"""
-        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:16px 20px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 1px 2px rgba(0,0,0,0.02);">
-            <div>
-                <a href="/klass/{k_slug}" style="color:#0f172a;font-size:16px;font-weight:700;text-decoration:none;">{k_name}</a>
-                <div style="font-size:12px;color:#64748b;margin-top:3px;">{other_facets}</div>
-            </div>
-            <span style="background:#f1f5f9;border:1px solid #e2e8f0;color:#0f766e;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;">
-                {obs_count} variants
-            </span>
-        </div>
-        """
+    chips = "".join([f'<a href="/klass/{k["slug"]}" class="klass-chip">{k["name"]}</a>' for k in klasses])
 
     html = f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>{clean_val.title()} ({facet_name}) — Infinity Product</title>
+        <title>{clean_val.upper()} — Infinity Product</title>
         <meta charset="utf-8">
-        <style>
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                background: #f8fafc;
-                color: #0f172a;
-                margin: 0;
-                padding: 40px 20px;
-                line-height: 1.5;
-            }}
-            .container {{
-                max-width: 780px;
-                margin: 0 auto;
-            }}
-            .header-card {{
-                background: #ffffff;
-                border: 1px solid #e2e8f0;
-                border-radius: 10px;
-                padding: 24px 32px;
-                margin-bottom: 20px;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.03);
-            }}
-            h1 {{
-                margin: 0;
-                font-size: 24px;
-                font-weight: 700;
-                color: #0f172a;
-            }}
-            .label {{
-                font-size: 12px;
-                font-weight: 700;
-                color: #0f766e;
-                text-transform: uppercase;
-                letter-spacing: 0.6px;
-                margin-bottom: 4px;
-            }}
-        </style>
+        <style>{BASE_CSS}</style>
     </head>
     <body>
         <div class="container">
-            <div style="margin-bottom:16px;">
-                <a href="/klass/tracheostomy-tube" style="color:#0284c7;text-decoration:none;font-size:13px;font-weight:600;">← Return to Tracheostomy Tube</a>
+            <div class="top-nav">
+                <a href="/">← All Klasses</a>
             </div>
             
-            <div class="header-card">
-                <div class="label">Inverted Facet Destination</div>
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <h1>{clean_val.title()}</h1>
-                    <span style="background:#0f766e;color:#ffffff;padding:4px 12px;border-radius:4px;font-size:13px;font-weight:700;">
-                        {len(klasses)} Connected Klasses
-                    </span>
+            <div class="card">
+                <h1>{clean_val.upper()}</h1>
+                
+                <div class="facet-group">
+                    <div class="facet-label">Observed on:</div>
+                    <div class="chip-bag">
+                        {chips or '<span style="color:#94a3b8;">No connected Klasses</span>'}
+                    </div>
                 </div>
             </div>
-
-            <div style="font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;">
-                Klasses Manufactured with {clean_val.title()}
-            </div>
-
-            {klass_cards or '<p style="color:#64748b;">No Klasses found for this facet value.</p>'}
         </div>
     </body>
     </html>
     """
     return HTMLResponse(content=html)
+
 
 @app.get("/material/{mat_name}", response_class=HTMLResponse)
 def redirect_material(mat_name: str):
