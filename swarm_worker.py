@@ -134,22 +134,45 @@ def extract_products_from_image(image_data, spread_num):
     if not ocr_res:
         return []
         
-    text = "\n".join([line[1] for line in ocr_res])
+    img_h, img_w = img_np.shape[:2]
+    mid_x = img_w // 2
+    
+    # Sort bounding boxes into natural reading order: Left Column (top-to-bottom), then Right Column (top-to-bottom)
+    left_col = []
+    right_col = []
+    
+    for item in ocr_res:
+        box, text_val, conf = item[0], item[1], item[2]
+        center_x = sum([p[0] for p in box]) / 4.0
+        center_y = sum([p[1] for p in box]) / 4.0
+        if center_x < mid_x:
+            left_col.append((center_y, text_val))
+        else:
+            right_col.append((center_y, text_val))
+            
+    left_col.sort(key=lambda x: x[0])
+    right_col.sort(key=lambda x: x[0])
+    
+    left_text = "\n".join([t[1] for t in left_col])
+    right_text = "\n".join([t[1] for t in right_col])
+    
+    text = f"--- COLUMN 1 ---\n{left_text}\n\n--- COLUMN 2 ---\n{right_text}" if right_text else left_text
     if len(text.strip()) < 60:
         return []
         
-    prompt = f"""You are an expert medical device catalog extraction engine.
+    prompt = f"""You are an expert universal medical device catalog extraction engine.
 Extract EVERY distinct product model block on this page into clean structured JSON.
 
 CRITICAL RULES:
-1. STRICT PRODUCT BLOCK ISOLATION:
-   - Each model number heading / Cat.No table prefix (e.g. 'LB3011', 'LB3012', 'LB3021', 'LB3030') defines a SEPARATE, INDEPENDENT product block.
-   - NEVER merge SKUs, names, or materials from one model block into another (e.g. LB3011 is PVC Anesthesia Mask; LB3012 is PVC Free Mask; LB3021 is Soft Mask; LB3030 is Silicone Mask. Do NOT mix them).
+1. PRODUCT BLOCK INTEGRITY:
+   - A page may contain multiple independent product blocks side-by-side or stacked.
+   - Each product block consists of its title/heading, description, and its own SKU specification table.
+   - Never merge SKUs or specifications from one product block into a different product.
 2. klass_name: Choose the ordinary generic product type that would remain if all configuration choices were removed (e.g. 'Anesthesia Mask', 'Foley Catheter', 'Endotracheal Tube', 'Tracheostomy Tube', 'Laryngeal Mask', 'Nebulizer Mask', 'Suction Catheter').
    - DO NOT include configuration adjectives in klass_name (e.g. output 'Anesthesia Mask', NOT 'PVC Free Anesthesia Mask' or 'Silicone Anesthesia Mask').
-   - DO NOT over-generalize (e.g. output 'Endobronchial Tube', NOT 'Tube').
-3. raw_product_name: Preserve the manufacturer's complete original heading verbatim for THAT SPECIFIC model block (e.g. 'LB3012 PVC Free Anesthesia Mask', 'LB3030 Silicone Anesthesia Mask (One-piece)').
-4. facet_bag: Extract EVERY meaningful qualifier stated in that model's text (material, ways, valve, reusable/disposable, cuff, connector, etc.).
+   - DO NOT over-generalize beyond the recognized product type (e.g. output 'Endobronchial Tube', NOT 'Tube').
+3. raw_product_name: Preserve the manufacturer's complete original heading verbatim for that specific product block.
+4. facet_bag: Extract EVERY meaningful qualifier stated in that model's text (material, ways, valve, reusable/disposable, cuff, connector, etc.). Free-form discovered keys are expected.
 5. variants: List individual SKU entries belonging ONLY to that model's table with their SKU-specific facets (size, gauge, cat_no, connector).
 
 JSON Schema:
@@ -157,18 +180,17 @@ JSON Schema:
   "products": [
     {{
       "klass_name": "Generic Product Type (e.g. 'Anesthesia Mask')",
-      "raw_product_name": "Exact Block Name (e.g. 'LB3012 PVC Free Anesthesia Mask')",
+      "raw_product_name": "Full Original Heading",
       "facet_bag": {{
-        "material": ["TPE", "Polypropylene (PP)"],
-        "pvc_free": "True",
-        "use": "Single Patient Use"
+        "material": ["Observed materials"],
+        "use": "Single Patient Use / Reusable"
       }},
       "variants": [
         {{
-          "cat_no": "LB301201",
+          "cat_no": "SKU code",
           "facet_bag": {{
-            "size": "1# - Neonate",
-            "connector": "15mm OD"
+            "size": "Observed size",
+            "connector": "Observed connector"
           }}
         }}
       ]
