@@ -42,31 +42,25 @@ app = FastAPI(title="Infinity Product - Server Prime", lifespan=lifespan)
 
 @app.get("/api/status")
 def get_status():
-    pending = tasks_col.count_documents({"status": "pending"})
-    processing = tasks_col.count_documents({"status": "processing"})
-    completed = tasks_col.count_documents({"status": "completed"})
+    remaining = tasks_col.count_documents({})
     total_obs = obs_col.count_documents({})
     total_klasses = klass_col.count_documents({})
     
     return {
         "status": "online",
-        "pending_tasks": pending,
-        "processing_tasks": processing,
-        "completed_tasks": completed,
+        "remaining_tasks": remaining,
         "total_observations": total_obs,
         "total_klasses": total_klasses
     }
 
 @app.post("/api/reset-queue")
 def reset_queue(purge_data: bool = True):
-    """Purge all queue states and observations for a completely fresh swarm run."""
+    """Purge all remaining tasks and observations."""
     tasks_col.delete_many({})
     if purge_data:
         obs_col.delete_many({})
         klass_col.delete_many({})
-    print("🧹 [Server Prime] Queue and data completely purged!")
-    return {"status": "purged", "message": "All tasks and data wiped clean"}
-
+    print("🧹 [Server Prime] Queue and data wiped clean!")
 @app.post("/api/enqueue-catalog")
 def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int = 4, end_spread: int = 48):
     """Seed atomic page tasks into swarm_tasks queue from a catalog PDF."""
@@ -86,7 +80,6 @@ def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int =
         pil_image = page.render(scale=2).to_pil()
         w, h = pil_image.size
         
-        # Destructively crop margin tabs on right page
         left_img = pil_image.crop((0, 0, w // 2, h))
         right_img = pil_image.crop((w // 2, 0, int(w * 0.93), h))
         
@@ -102,11 +95,7 @@ def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int =
                 "side": side_name,
                 "image_path": img_rel_path,
                 "action": "ocr_and_extract",
-                "status": "pending",
-                "worker_id": None,
-                "created_at": now,
-                "claimed_at": None,
-                "completed_at": None
+                "created_at": now
             }
             
             tasks_col.update_one(
@@ -118,35 +107,19 @@ def enqueue_catalog(pdf_path: str = "foyomed catalogue.pdf", start_spread: int =
             
     return {"enqueued_tasks": enqueued_count, "start_spread": start_spread, "end_spread": end_spread}
 
-import random
-
 @app.get("/api/get-work")
-def get_work(worker: str = "anonymous_worker", shuffle: bool = True):
-    """DUMB worker asks for work. Server Prime selects tasks randomly across all catalogs to diversify ingestion."""
-    now = datetime.datetime.now(datetime.timezone.utc)
-    
-    if shuffle:
-        # Sample a random pending task ID to mix up catalogs and spread sections
-        pipeline = [{"$match": {"status": "pending"}}, {"$sample": {"size": 1}}]
-        samples = list(tasks_col.aggregate(pipeline))
-        if not samples:
-            return {"has_work": False}
-        target_id = samples[0]["task_id"]
-        
-        task = tasks_col.find_one_and_update(
-            {"task_id": target_id, "status": "pending"},
-            {"$set": {"status": "processing", "worker_id": worker, "claimed_at": now}}
-        )
-    else:
-        task = tasks_col.find_one_and_update(
-            {"status": "pending"},
-            {"$set": {"status": "processing", "worker_id": worker, "claimed_at": now}},
-            sort=[("spread_num", 1), ("created_at", 1)]
-        )
-    
-    if not task:
+def get_work(worker: str = "anonymous_worker"):
+    """DUMB worker asks for work. Server Prime pops/deletes 1 random task and returns it."""
+    # Pop a random task from the queue
+    pipeline = [{"$sample": {"size": 1}}]
+    samples = list(tasks_col.aggregate(pipeline))
+    if not samples:
         return {"has_work": False}
         
+    task = samples[0]
+    # Delete immediately
+    tasks_col.delete_one({"_id": task["_id"]})
+    
     img_b64 = None
     if os.path.exists(task["image_path"]):
         with open(task["image_path"], "rb") as f:
@@ -166,22 +139,14 @@ def get_work(worker: str = "anonymous_worker", shuffle: bool = True):
 
 @app.post("/api/submit-work")
 async def submit_work(request: Request):
-    """DUMB worker returns payload. Server Prime saves to MongoDB and updates living ontologies."""
+    """DUMB worker returns products payload. Server Prime saves to MongoDB."""
     payload = await request.json()
     task_id = payload.get("task_id")
     products = payload.get("products", [])
     now = datetime.datetime.now(datetime.timezone.utc)
     
-    task = tasks_col.find_one({"task_id": task_id})
-    if not task:
-        return {"status": "error", "message": "Task not found"}
-        
     # 1. Insert Observations
     for prod in products:
-        prod["source_catalog"] = task["catalog_file"]
-        prod["spread_num"] = task["spread_num"]
-        prod["side"] = task["side"]
-        prod["image_url"] = task["image_path"]
         prod["ingested_at"] = now
         obs_col.insert_one(prod)
         
@@ -200,7 +165,6 @@ async def submit_work(request: Request):
                     "name": k_name,
                     "slug": slug,
                     "total_observations": len(all_k_obs),
-                    "hero_image": task["image_path"],
                     "observed_facet_space": {
                         "materials": all_mats,
                         "sizes": all_sizes
@@ -212,12 +176,7 @@ async def submit_work(request: Request):
             upsert=True
         )
         
-    tasks_col.update_one(
-        {"task_id": task_id},
-        {"$set": {"status": "completed", "products_extracted": len(products), "completed_at": now}}
-    )
-    
-    print(f"  ✅ [Task {task_id}] Submitted by worker! Ingested {len(products)} observations.")
+    print(f"  ✅ [Task {task_id}] Received! Saved {len(products)} observations.")
     return {"status": "ok", "ingested": len(products)}
 
 if __name__ == "__main__":
