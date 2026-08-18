@@ -171,7 +171,9 @@ async def submit_work(request: Request):
             },
             upsert=True
         )
-   from facet_bag_synthesizer import build_facet_bag_for_klass
+    return {"status": "ok", "ingested": len(products)}
+
+from facet_bag_synthesizer import build_facet_bag_for_klass
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
