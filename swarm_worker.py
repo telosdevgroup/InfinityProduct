@@ -150,9 +150,28 @@ OCR Text:
 
     try:
         resp = requests.post(OLLAMA_URL, json=payload, timeout=90)
-        raw = resp.json().get("response", "")
-        parsed = json.loads(raw)
-        data = parsed.get("products", parsed) if isinstance(parsed, dict) else parsed
+        raw = resp.json().get("response", "").strip()
+        
+        data = []
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and "products" in parsed:
+                data = parsed["products"]
+            elif isinstance(parsed, list):
+                data = parsed
+            elif isinstance(parsed, dict):
+                data = [parsed]
+        except Exception:
+            match = re.search(r'\[.*\]', raw, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+            else:
+                match_dict = re.search(r'\{.*\}', raw, re.DOTALL)
+                if match_dict:
+                    parsed = json.loads(match_dict.group(0))
+                    data = parsed.get("products", [parsed])
+                else:
+                    return []
         
         atomic = []
         for prod in data:
