@@ -11,7 +11,7 @@ from rapidocr_onnxruntime import RapidOCR
 
 SERVER_PRIME_URL = os.getenv("SERVER_PRIME_URL", "http://localhost:8371")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-MODEL_NAME = os.getenv("MODEL_NAME", "qwen3.5:9b")
+MODEL_NAME = os.getenv("MODEL_NAME", "granite4.1:8b")
 WORKER_NAME = f"worker-{socket.gethostname()}-{os.getpid()}"
 
 ocr = RapidOCR()
@@ -244,8 +244,13 @@ def worker_loop():
             extracted_products = extract_products_from_image(data["image_path"], data["spread_num"])
             dur = time.time() - t0
             
-            print(f"   ↳ Extracted {len(extracted_products)} products in {dur:.2f}s. Submitting payload...")
-            
+            print(f"   ↳ Extracted {len(extracted_products)} products in {dur:.2f}s:")
+            for p in extracted_products:
+                mats = ", ".join(p.get("materials", [])) or "N/A"
+                sz = p.get("attributes", {}).get("size") or "N/A"
+                print(f"       • 📦 [{p.get('klass_name')}] {p.get('product_name')}")
+                print(f"            ↳ Mats: {mats} | Size: {sz}")
+                
             submit_resp = requests.post(
                 f"{SERVER_PRIME_URL}/api/submit-work",
                 json={"task_id": task_id, "products": extracted_products},
