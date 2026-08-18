@@ -360,9 +360,13 @@ def process_catalog(pdf_path, start_page=4, end_page=48, output_file="extracted_
         pil_image = page.render(scale=2).to_pil()
         
         w, h = pil_image.size
+        # Slices off the vertical side margin tabs (rightmost ~7% of spread) destructively
+        left_page_img = pil_image.crop((0, 0, w // 2, h))
+        right_page_img = pil_image.crop((w // 2, 0, int(w * 0.93), h))
+        
         pages_in_spread = [
-            ("Left_Page", pil_image.crop((0, 0, w // 2, h))),
-            ("Right_Page", pil_image.crop((w // 2, 0, w, h)))
+            ("Left_Page", left_page_img),
+            ("Right_Page", right_page_img)
         ]
         
         spread_products = []
