@@ -10,7 +10,7 @@ from pymongo import MongoClient
 import pypdfium2 as pdfium
 from PIL import Image
 
-app = FastAPI(title="Infinity Product - Server Prime")
+from contextlib import asynccontextmanager
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 DB_NAME = "infinityproduct_dev"
@@ -26,13 +26,18 @@ obs_col = db[OBSERVATIONS_COLL]
 klass_col = db[KLASSES_COLL]
 catalogs_col = db[CATALOGS_COLL]
 
-@app.on_event("startup")
-def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Ensure indexes and clean any stale documents without slugs
+    klass_col.delete_many({"slug": None})
     tasks_col.create_index([("status", 1), ("created_at", 1)])
     tasks_col.create_index("task_id", unique=True)
     obs_col.create_index("cat_no")
     klass_col.create_index("slug", unique=True)
     print("🚀 [Server Prime] Online and connected to MongoDB!")
+    yield
+
+app = FastAPI(title="Infinity Product - Server Prime", lifespan=lifespan)
 
 @app.get("/api/status")
 def get_status():
