@@ -631,7 +631,7 @@ def generate_klass_blurb(self, klass_slug: str):
     # Use the engine's dynamic facet extraction across all available products
     from web.server import engine
     klass_data = engine.get_klass_facetbag(klass_slug)
-    EXCLUDED_PROMPT_GROUPS = {"vendor", "brand", "manufacturer", "distributor"}
+    EXCLUDED_PROMPT_GROUPS = {"vendor", "brand", "manufacturer", "distributor", "size", "color", "quantity", "pack", "count", "weight", "volume", "dimension"}
     variant_axes = {}
     if klass_data and "facet_groups" in klass_data:
         for g in klass_data["facet_groups"]:
@@ -649,19 +649,21 @@ def generate_klass_blurb(self, klass_slug: str):
 
     factory_log("BLURB", f"context: {len(dim_keys)} dimensions ({', '.join(dim_keys[:5])})")
 
-    system_prompt = """You are an encyclopedia editor writing a short, clear, Wikipedia-style overview of a medical product Klass.
+    system_prompt = """You are an encyclopedia editor writing a crisp, clear, Wikipedia-style overview of a medical product Klass.
 
 Guidelines:
-- Write in plain, accessible, authoritative clinical English. Avoid dense latin medical jargon (e.g. use "allows the wound to naturally clear dead tissue while preventing skin breakdown" instead of "autolytic debridement" or "maceration").
-- Do not mention specific store vendors, brand names, or distributors. Focus on practical clinical purpose, common medical indications, key materials, and how the product protects patients.
-- Do not mechanically enumerate facet groups. The FacetBag is evidence, not an outline.
-- Target roughly 2–4 sentences. Output raw paragraph text directly with zero introductory remarks."""
+- Write in clean, concise, authoritative English. Keep sentences punchy (under 20 words) and varied.
+- NEVER write run-on sentences with endless "and... and... with...".
+- NEVER use parenthetical lists like "(small, medium, large)" or "(blue, pink, green)".
+- Avoid dense latin medical jargon (e.g. use "allows the wound to naturally clear dead tissue while preventing skin breakdown" instead of "autolytic debridement" or "maceration").
+- Do not mention specific store vendors, brand names, or distributors. Focus on practical clinical purpose, primary barrier materials, and patient protection.
+- Target exactly 2–3 crisp sentences. Output raw paragraph text directly with zero introductory remarks."""
 
     user_prompt = f"""Product Class: {plural_name}
 Discovered Variant Attributes:
 {json.dumps(variant_axes, indent=2)}
 
-Write the 2–4 sentence Wikipedia-style overview for {plural_name}:"""
+Write the 2–3 crisp sentence overview for {plural_name}:"""
 
     blurb_content = ""
     t0 = time.time()
