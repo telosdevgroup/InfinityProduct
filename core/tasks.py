@@ -74,10 +74,10 @@ def _get_redis_log_client():
             pass
     return _redis_log_client
 
-def factory_log(station: str, message: str):
+def factory_log(station: str, message: str, blank_after: bool = False):
     """
     Emits loud, colorized factory logs with real-time queue depth (N)
-    to stdout and appends to factory_stream.log without timestamp clutter.
+    to stdout and appends to factory_stream.log with clean section spacing.
     """
     color = STATION_COLORS.get(station, "")
     
@@ -99,12 +99,16 @@ def factory_log(station: str, message: str):
 
     # Print directly to worker stdout
     sys.stdout.write(formatted_console + "\n")
+    if blank_after:
+        sys.stdout.write("\n")
     sys.stdout.flush()
 
     # Append plain text to factory_stream.log
     try:
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(formatted_plain + "\n")
+            if blank_after:
+                f.write("\n")
     except Exception:
         pass
 
@@ -588,7 +592,7 @@ Rules:
 
     factory_log("KLASS", f"\"{title}\"")
     factory_log("KLASS", f"-> inferred: {inferred_klass}")
-    factory_log("DONE", f"product={url} complete")
+    factory_log("DONE", f"product={url} complete", blank_after=True)
 
     # Record discovered Klass metadata without triggering blurb generation
     klass_slug = slugify(inferred_klass)
@@ -707,6 +711,7 @@ Write the 2–4 sentence Wikipedia-style overview for {plural_name}:"""
     factory_log("BLURB", f"saved klass_metadata for \"{klass_slug}\"")
 
     # Cascade: Automatically enqueue clinical facet values for this Klass into facet_blurb_q!
+    has_cascaded = False
     try:
         from web.server import engine
         EXCLUDED_KEYS = {"color", "size", "vendor", "quantity", "pack", "count", "weight", "volume", "dimension"}
@@ -724,9 +729,13 @@ Write the 2–4 sentence Wikipedia-style overview for {plural_name}:"""
                     generate_facet_value_blurb.delay(klass_slug, key, str(val))
                     enqueued_facets += 1
         if enqueued_facets > 0:
-            factory_log("BLURB", f"-> cascaded {enqueued_facets} clinical facet tasks to facet_blurb_q for \"{klass_slug}\"")
+            has_cascaded = True
+            factory_log("BLURB", f"-> cascaded {enqueued_facets} clinical facet tasks to facet_blurb_q for \"{klass_slug}\"", blank_after=True)
     except Exception as e:
         factory_log("ERROR", f"Failed cascading facet blurbs for {klass_slug}: {e}")
+
+    if not has_cascaded:
+        factory_log("BLURB", f"done with {klass_slug}", blank_after=True)
 
     return {"klass_slug": klass_slug, "status": "ready", "blurb": blurb_content}
 
@@ -744,7 +753,7 @@ def generate_facet_value_blurb(self, klass_slug: str, facet_key: str, facet_val:
 
     meta = klass_metadata_col.find_one({"_id": klass_slug})
     if not meta or not meta.get("blurb"):
-        factory_log("FACET", f"skipped {klass_slug} (no Klass blurb present yet)")
+        factory_log("FACET", f"skipped {klass_slug} (no Klass blurb present yet)", blank_after=True)
         return {"klass_slug": klass_slug, "status": "skipped", "reason": "no_parent_blurb"}
 
     klass_blurb = meta.get("blurb", "")
@@ -787,11 +796,11 @@ Clinical Guidance (1-2 sentences):"""
         if resp.status_code == 200:
             raw = resp.json().get("response", "").strip()
             value_blurb = re.sub(r'^(Here is|Here are|Here\'s|Below is).*?:\s*', '', raw, flags=re.IGNORECASE).strip()
-            factory_log("FACET", f"-> \"{value_blurb}\" ({dur}s)")
+            factory_log("FACET", f"-> \"{value_blurb}\" ({dur}s)", blank_after=True)
         else:
-            factory_log("ERROR", f"Ollama HTTP {resp.status_code}")
+            factory_log("ERROR", f"Ollama HTTP {resp.status_code}", blank_after=True)
     except Exception as e:
-        factory_log("ERROR", f"Facet blurb failed for {klass_slug} {facet_key}:{facet_val}: {e}")
+        factory_log("ERROR", f"Facet blurb failed for {klass_slug} {facet_key}:{facet_val}: {e}", blank_after=True)
 
     if not value_blurb:
         value_blurb = f"Indicated for standard {klass_title.lower()} applications requiring {facet_val.lower()} specifications."
