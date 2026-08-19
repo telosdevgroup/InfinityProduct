@@ -684,8 +684,7 @@ Write the 2–4 sentence Wikipedia-style overview for {plural_name}:"""
         if resp.status_code == 200:
             raw_response = resp.json().get("response", "").strip()
             blurb_content = re.sub(r'^(Here is|Here are|Here\'s|Below is).*?:\s*', '', raw_response, flags=re.IGNORECASE).strip()
-            sentences = [s for s in blurb_content.split('.') if s.strip()]
-            factory_log("BLURB", f"-> generated {len(sentences)} sentences ({dur}s)")
+            factory_log("BLURB", f"-> \"{blurb_content}\" ({dur}s)")
         else:
             factory_log("ERROR", f"Ollama HTTP error {resp.status_code}: {resp.text}")
     except Exception as e:
@@ -772,7 +771,7 @@ Clinical Guidance (1-2 sentences):"""
         if resp.status_code == 200:
             raw = resp.json().get("response", "").strip()
             value_blurb = re.sub(r'^(Here is|Here are|Here\'s|Below is).*?:\s*', '', raw, flags=re.IGNORECASE).strip()
-            factory_log("FACET", f"-> saved ({dur}s)")
+            factory_log("FACET", f"-> \"{value_blurb}\" ({dur}s)")
         else:
             factory_log("ERROR", f"Ollama HTTP {resp.status_code}")
     except Exception as e:
