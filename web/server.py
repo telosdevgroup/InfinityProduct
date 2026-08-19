@@ -259,16 +259,26 @@ class InfinityProductEngine:
 
         prods = list(self.db["source_products"].find(
             query,
-            {"title": 1, "source_url": 1, "facet_bag": 1, "raw.vendor": 1, "inferred_klass": 1}
+            {"title": 1, "source_url": 1, "facet_bag": 1, "raw.vendor": 1, "raw.images": 1, "raw.image": 1, "inferred_klass": 1}
         ).limit(limit))
 
         results = []
         for p in prods:
+            raw = p.get("raw") or {}
+            img_url = None
+            if isinstance(raw, dict):
+                imgs = raw.get("images", [])
+                if imgs and isinstance(imgs, list) and isinstance(imgs[0], dict):
+                    img_url = imgs[0].get("src")
+                elif raw.get("image") and isinstance(raw.get("image"), dict):
+                    img_url = raw.get("image", {}).get("src")
+
             results.append({
                 "id": str(p["_id"]),
                 "title": p.get("title", ""),
                 "url": p.get("source_url", ""),
-                "vendor": p.get("raw", {}).get("vendor") or p.get("facet_bag", {}).get("Vendor", ""),
+                "vendor": raw.get("vendor") or p.get("facet_bag", {}).get("Vendor", ""),
+                "image_url": img_url,
                 "facet_bag": p.get("facet_bag", {})
             })
         return {
