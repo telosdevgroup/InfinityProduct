@@ -712,6 +712,29 @@ Write the 2–4 sentence Wikipedia-style overview for {plural_name}:"""
     )
 
     factory_log("BLURB", f"saved klass_metadata for \"{klass_slug}\"")
+
+    # Cascade: Automatically enqueue clinical facet values for this Klass into facet_blurb_q!
+    try:
+        from web.server import engine
+        EXCLUDED_KEYS = {"color", "size", "vendor", "quantity", "pack", "count", "weight", "volume", "dimension"}
+        data = engine.get_klass_facetbag(klass_slug)
+        enqueued_facets = 0
+        for g in data.get("facet_groups", [])[:4]:
+            key = g.get("label") or g.get("key")
+            if key.lower() in EXCLUDED_KEYS:
+                continue
+            for v in g.get("values", [])[:6]:
+                val = v.get("value")
+                cnt = v.get("count", 0)
+                pct = v.get("percentage", 0)
+                if val and (cnt >= 3 or pct >= 5.0):
+                    generate_facet_value_blurb.delay(klass_slug, key, str(val))
+                    enqueued_facets += 1
+        if enqueued_facets > 0:
+            factory_log("BLURB", f"-> cascaded {enqueued_facets} clinical facet tasks to facet_blurb_q for \"{klass_slug}\"")
+    except Exception as e:
+        factory_log("ERROR", f"Failed cascading facet blurbs for {klass_slug}: {e}")
+
     return {"klass_slug": klass_slug, "status": "ready", "blurb": blurb_content}
 
 # ==============================================================================
