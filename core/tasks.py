@@ -152,8 +152,8 @@ def extract_facetbag_from_raw(title: str, desc: str, vendor: str = None) -> dict
     # 1. Materials
     for m in ["nitrile", "vinyl", "latex", "silicone", "foam", "cotton", "gauze", "silver", "alginate", "polyurethane", "stainless steel", "polychloroprene", "rubber", "hydrocolloid", "hydrogel", "collagen", "zinc", "calcium alginate"]:
         if m in ["latex", "rubber"]:
-            # Check for negative latex-free statements
-            if "latex-free" in full_text or "latex free" in full_text or "not made with natural rubber latex" in full_text or "non-latex" in full_text:
+            # Check for negative latex-free statements (including "latex- and powder-free", "non-latex", etc.)
+            if re.search(r"\blatex\s*-\s*(?:and\s*[\w-]+\s*)?free\b", full_text) or "latex-free" in full_text or "latex free" in full_text or "not made with natural rubber latex" in full_text or "non-latex" in full_text or "without latex" in full_text:
                 facet_bag["Latex Safety"] = "Latex-Free"
                 continue
         if re.search(r"\b" + re.escape(m) + r"\b", full_text):
