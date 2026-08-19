@@ -621,14 +621,23 @@ def infer_klass(self, url: str):
     # STATION 3: LLM TAXONOMIC CLASSIFICATION (Granite 4.1:8B + Full Shopify Context)
     # ==========================================================================
     system_prompt = """You are an expert healthcare product taxonomy classifier.
-Your task is to classify medical and clinical products into a clean, standardized canonical product category (2 to 3 words, singular snake_case).
+Your task is to classify medical and clinical products into a clean, standardized canonical product category (1 to 3 words, singular snake_case).
 
 CRITICAL TAXONOMY RULES:
-1. Output a 2 to 3 word qualified noun phrase (e.g. glucose_test_strip, diagnostic_wall_system, exam_table_paper, instrument_tray, hypodermic_needle, vital_signs_monitor, exam_glove).
-2. DO NOT output single generic words (NEVER output: gel, paper, tray, bag, pump, lock, rack, device, system, pad, part).
-3. DO NOT output 5-word attribute descriptions (NEVER include: sterile, non-sterile, luer_slip, reusable, 4x4, 100_pack, blue, extra_large). Put attributes aside; identify only the CORE CLINICAL PRODUCT NOUN.
-4. Use the Shopify Category hierarchy, Vendor, and Product Description to ground the true product type.
-5. Output ONLY the single snake_case category term."""
+1. Identify the core noun of the physical object or substance (e.g. activated_charcoal, exam_table, exam_glove, hypodermic_needle, ultrasound_gel).
+2. DO NOT append functional marketing phrases (remove: "poison absorbent", "skin protectant", "odor eliminator", "pain relief", "moisture barrier"). Output the core substance/item (e.g. "activated_charcoal", "petroleum_jelly", "barrier_cream").
+3. DO NOT output single generic words without qualification (NEVER output: gel, paper, tray, bag, pump, lock, rack, device, system, pad, part).
+4. DO NOT output 5-word attribute descriptions (NEVER include: sterile, non-sterile, luer_slip, reusable, 4x4, 100_pack, blue, extra_large).
+5. Use the Shopify Category hierarchy, Vendor, and Product Description to ground the true product type.
+6. Output ONLY the single snake_case category term.
+
+FEW-SHOT EXAMPLES:
+- "Actidose-Aqua Activated Charcoal Poison Absorbent" -> activated_charcoal
+- "BD Eclipse Hypodermic Needle with Safety Cover 21G" -> hypodermic_needle
+- "3M Tegaderm Transparent Film Dressing 4x4" -> transparent_film_dressing
+- "Clinton Industries Power Hi-Lo Bariatric Exam Table with Stirrups" -> exam_table
+- "Welch Allyn Green Series 777 Wall Transformer Diagnostic System" -> diagnostic_wall_transformer
+- "McKesson Confiderm Nitrile Exam Gloves Powder-Free Large" -> exam_glove"""
 
     user_prompt = f"""PRODUCT DETAILS:
 Title: {title}
