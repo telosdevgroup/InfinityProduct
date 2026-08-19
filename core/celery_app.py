@@ -19,7 +19,9 @@ def _patched_init(self, *args, **kwargs):
     _orig_init(self, *args, **kwargs)
 redis.connection.Connection.__init__ = _patched_init
 
-REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+is_local = "--local" in sys.argv or os.environ.get("LOCAL", "0").lower() in ["1", "true"]
+DEFAULT_HOST = "localhost" if is_local else "192.168.1.213"
+REDIS_HOST = os.environ.get("REDIS_HOST", DEFAULT_HOST)
 REDIS_URL = f"redis://{REDIS_HOST}:6379/0"
 
 app = Celery("infinity_factory", broker=REDIS_URL, include=["core.tasks"])

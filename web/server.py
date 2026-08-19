@@ -6,7 +6,10 @@ from pymongo import MongoClient
 import os
 import sys
 
-MONGO_URI = "mongodb://localhost:27017/"
+is_local = "--local" in sys.argv or os.environ.get("LOCAL", "0").lower() in ["1", "true"]
+DEFAULT_HOST = "localhost" if is_local else "192.168.1.213"
+MONGO_HOST = os.environ.get("MONGO_HOST", DEFAULT_HOST)
+MONGO_URI = f"mongodb://{MONGO_HOST}:27017/"
 DB_NAME = "infinityproduct_dev"
 PORT = 8765
 

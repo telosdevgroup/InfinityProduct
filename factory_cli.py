@@ -19,7 +19,11 @@ if BASE_DIR not in sys.path:
 from core import celery_app
 from core.tasks import check_sitemap, sync_source_catalog, ingest_product_url, infer_klass, reconcile_klass, generate_klass_blurb, slugify, format_title
 
-MONGO_URI = "mongodb://localhost:27017/"
+is_local = "--local" in sys.argv or os.environ.get("LOCAL", "0").lower() in ["1", "true"]
+DEFAULT_HOST = "localhost" if is_local else "192.168.1.213"
+REDIS_HOST = os.environ.get("REDIS_HOST", DEFAULT_HOST)
+MONGO_HOST = os.environ.get("MONGO_HOST", DEFAULT_HOST)
+MONGO_URI = f"mongodb://{MONGO_HOST}:27017/"
 DB_NAME = "infinityproduct_dev"
 LOG_FILE_PATH = os.path.join(BASE_DIR, "factory_stream.log")
 
@@ -52,7 +56,7 @@ def get_db():
     return client[DB_NAME]
 
 def get_redis():
-    return redis.Redis(host="localhost", port=6379, db=0, protocol=2)
+    return redis.Redis(host=REDIS_HOST, port=6379, db=0, protocol=2)
 
 def colorize_log_line(line: str) -> str:
     """Applies ANSI syntax highlighting to raw log lines without timestamp."""
