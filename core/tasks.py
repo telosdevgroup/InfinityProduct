@@ -241,13 +241,18 @@ def extract_facetbag_from_raw(title: str, desc: str, vendor: str = None) -> dict
 
     return facet_bag
 
+KNOWN_STORES = {
+    "emedicalkits": "https://emedicalkits.com",
+    "tigermedical": "https://tigermedical.com",
+}
+
 # ==============================================================================
 # STATION 1: SITEMAP & HIGH-SPEED FEED DISCOVERY WORKER (check_sitemap_q)
 # ==============================================================================
 @app.task(name="tasks.sync_source_catalog", bind=True)
-def sync_source_catalog(self, source_id: str = "emedicalkits"):
+def sync_source_catalog(self, source_id: str = "emedicalkits", base_url: str = None):
     """
-    High-speed deterministic catalog ingestion:
+    High-speed deterministic catalog ingestion across arbitrary Shopify stores:
     Paginates /products.json?limit=250 to ingest all products and extract facets in seconds.
     """
     db = get_mongo_db()
@@ -256,14 +261,17 @@ def sync_source_catalog(self, source_id: str = "emedicalkits"):
     sitemaps_col = db["sitemaps"]
     now = datetime.datetime.now(datetime.timezone.utc)
 
-    factory_log("SITEMAP", f"Starting high-speed catalog sync for {source_id}...")
+    if not base_url:
+        base_url = KNOWN_STORES.get(source_id, f"https://{source_id}.com")
+    base_url = base_url.rstrip("/")
+
+    factory_log("SITEMAP", f"Starting high-speed catalog sync for {source_id} ({base_url})...")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json"
     }
 
-    base_url = "https://emedicalkits.com"
     page = 1
     total_ingested = 0
 
