@@ -184,11 +184,21 @@ def action_synthesize_facet_blurbs():
     for item in top_klasses:
         slug = slugify(item["_id"])
         data = engine.get_klass_facetbag(slug)
+        if not data.get("blurb"):
+            print(f"  [SKIPPED] {slug:<22} (No Klass Blurb present yet)")
+            continue
+
+        EXCLUDED_KEYS = {"color", "size", "vendor", "quantity", "pack", "count", "weight", "volume", "dimension"}
         for g in data.get("facet_groups", [])[:4]:
             key = g.get("label") or g.get("key")
+            if key.lower() in EXCLUDED_KEYS:
+                continue
             for v in g.get("values", [])[:6]:
                 val = v.get("value")
-                if val:
+                cnt = v.get("count", 0)
+                pct = v.get("percentage", 0)
+                # Guardrail: Only meaningful observations (count >= 3 or percentage >= 5%)
+                if val and (cnt >= 3 or pct >= 5.0):
                     generate_facet_value_blurb.delay(slug, key, str(val))
                     total_enqueued += 1
     print(f"{GREEN}[OK] Dispatched {total_enqueued} Facet-Value blurb tasks to 'facet_blurb_q'.{RESET}")

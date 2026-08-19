@@ -312,12 +312,26 @@ class ExplorerHandler(BaseHTTPRequestHandler):
             try:
                 from core.tasks import generate_facet_value_blurb
                 data = engine.get_klass_facetbag(klass_slug)
+                if not data.get("blurb"):
+                    self.respond_json({
+                        "status": "skipped",
+                        "reason": "missing_klass_blurb",
+                        "message": f"Klass '{klass_slug}' must have a synthesized Klass Blurb before generating contextual facet blurbs."
+                    })
+                    return
+
                 enqueued = 0
+                EXCLUDED_KEYS = {"color", "size", "vendor", "quantity", "pack", "count", "weight", "volume", "dimension"}
                 for g in data.get("facet_groups", []):
                     key = g.get("label") or g.get("key")
+                    if key.lower() in EXCLUDED_KEYS:
+                        continue
                     for v in g.get("values", []):
                         val = v.get("value")
-                        if val:
+                        cnt = v.get("count", 0)
+                        pct = v.get("percentage", 0)
+                        # Guardrail: Only meaningful observations (count >= 3 or percentage >= 5%)
+                        if val and (cnt >= 3 or pct >= 5.0):
                             generate_facet_value_blurb.delay(klass_slug, key, str(val))
                             enqueued += 1
                 self.respond_json({"status": "enqueued", "queue": "facet_blurb_q", "klass": klass_slug, "count": enqueued})

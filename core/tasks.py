@@ -15,9 +15,10 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from core.celery_app import app
+from core.celery_app import app, REDIS_HOST
 
-MONGO_URI = "mongodb://localhost:27017/"
+MONGO_HOST = os.environ.get("MONGO_HOST", REDIS_HOST)
+MONGO_URI = f"mongodb://{MONGO_HOST}:27017/"
 DB_NAME = "infinityproduct_dev"
 LOG_FILE_PATH = os.path.join(ROOT_DIR, "factory_stream.log")
 
@@ -68,7 +69,7 @@ def _get_redis_log_client():
     if _redis_log_client is None:
         try:
             import redis
-            _redis_log_client = redis.Redis(host="localhost", port=6379, db=0, protocol=2, socket_timeout=0.2)
+            _redis_log_client = redis.Redis(host=REDIS_HOST, port=6379, db=0, protocol=2, socket_timeout=0.2)
         except Exception:
             pass
     return _redis_log_client
@@ -727,18 +728,26 @@ def generate_facet_value_blurb(self, klass_slug: str, facet_key: str, facet_val:
     now = datetime.datetime.now(datetime.timezone.utc)
 
     meta = klass_metadata_col.find_one({"_id": klass_slug})
-    klass_blurb = meta.get("blurb", "") if meta else ""
+    if not meta or not meta.get("blurb"):
+        factory_log("FACET", f"skipped {klass_slug} (no Klass blurb present yet)")
+        return {"klass_slug": klass_slug, "status": "skipped", "reason": "no_parent_blurb"}
 
+    klass_blurb = meta.get("blurb", "")
     factory_log("FACET", f"[{klass_title}] {facet_key}: \"{facet_val}\"...")
 
-    system_prompt = """You are a clinical product specialist. Write a concise, 1-2 sentence contextual explanation for why a healthcare clinician chooses this specific facet value in the context of the given product Klass. Be direct, factual, and clinically accurate. Output ONLY the 1-2 sentences with zero conversational filler."""
+    system_prompt = """You are a technical medical device encyclopedia writer. Write a concise, direct, 1-2 sentence clinical explanation of the specific facet value in the context of the product Klass.
+Rules:
+1. Start directly with the subject (e.g. "Nitrile provides...", "Latex offers...", "Vinyl is...").
+2. DO NOT use conversational fluff, filler, or phrases like "A healthcare clinician selects", "Clinicians choose", "Chosen by clinicians", or "In clinical settings".
+3. Focus directly on material properties, barrier performance, tactile sensitivity, allergy considerations, and practical trade-offs.
+4. Output ONLY the raw 1-2 sentences with zero preamble."""
 
     user_prompt = f"""Product Class: {klass_title}
 Class Overview: {klass_blurb if klass_blurb else klass_title}
 Facet Dimension: {facet_key}
 Specific Value: {facet_val}
 
-Contextual Clinical Guidance (1-2 sentences):"""
+Clinical Guidance (1-2 sentences):"""
 
     t0 = time.time()
     value_blurb = ""
@@ -751,7 +760,7 @@ Contextual Clinical Guidance (1-2 sentences):"""
                 "prompt": user_prompt,
                 "options": {
                     "temperature": 0.1,
-                    "num_predict": 45,
+                    "num_predict": 75,
                     "num_ctx": 2048
                 },
                 "keep_alive": "1h",
