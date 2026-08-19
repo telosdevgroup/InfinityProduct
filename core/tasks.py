@@ -790,17 +790,47 @@ def reconcile_klass(self, proposed_klass_slug: str):
     
     proposed_clean = proposed_klass_slug.replace("-", "_").strip()
     
-    # 1. Gather product count & samples for this proposed klass
+    # 1. Gather product count & rich samples for this proposed klass
     matching_docs = list(source_products_col.find(
         {"$or": [{"inferred_klass": proposed_clean}, {"inferred_klass": proposed_klass_slug}, {"proposed_klass": proposed_clean}]},
-        {"_id": 1, "title": 1, "proposed_klass": 1}
+        {"_id": 1, "title": 1, "product_type": 1, "tags": 1, "facet_bag": 1, "raw.body_html": 1, "proposed_klass": 1}
     ))
     total_count = len(matching_docs)
-    sample_titles = [d.get("title", "") for d in matching_docs[:3] if d.get("title")]
-    sample_str = f"\"{sample_titles[0]}\"" if sample_titles else f"\"{proposed_clean}\""
+    
+    sample_descriptors = []
+    for d in matching_docs[:3]:
+        t = d.get("title", "")
+        if not t:
+            continue
+        ptype = d.get("product_type", "")
+        tags = d.get("tags", [])
+        tags_str = ", ".join(tags[:4]) if isinstance(tags, list) else str(tags)
+        
+        fb = d.get("facet_bag", {})
+        key_facets = []
+        for k in ["Material", "Grade", "Safety Rating", "Absorbency", "Sterility", "Cuff", "Vendor"]:
+            if k in fb:
+                val = fb[k]
+                if isinstance(val, list):
+                    val = ", ".join(val)
+                key_facets.append(f"{k}: {val}")
+        
+        meta_parts = []
+        if ptype:
+            meta_parts.append(f"Shopify Type: {ptype}")
+        if tags_str:
+            meta_parts.append(f"Tags: [{tags_str}]")
+        if key_facets:
+            meta_parts.append(f"Specs: {', '.join(key_facets)}")
+            
+        meta_suffix = f" ({' | '.join(meta_parts)})" if meta_parts else ""
+        sample_descriptors.append(f"{t}{meta_suffix}")
+
+    first_title = matching_docs[0].get("title", proposed_clean) if matching_docs else proposed_clean
+    sample_str = f"\"{first_title}\""
     
     factory_log("RECONCILE", f"{proposed_clean} [{total_count}]")
-    if sample_titles:
+    if sample_descriptors:
         factory_log("RECONCILE", f"samples: {sample_str}")
         
     cand_index = get_reconcile_candidate_index(db)
@@ -823,8 +853,8 @@ def reconcile_klass(self, proposed_klass_slug: str):
 PROPOSED CATEGORY TO EVALUATE:
 "{proposed_clean}"
 
-SAMPLE PRODUCTS:
-{chr(10).join(f"- {t}" for t in sample_titles)}
+SAMPLE PRODUCTS (WITH SHOPIFY METADATA & SPECS):
+{chr(10).join(f"- {s}" for s in sample_descriptors)}
 
 CANDIDATE CATEGORIES:
 {cand_lines}
