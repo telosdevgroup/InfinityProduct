@@ -48,6 +48,7 @@ STATION_COLORS = {
     "SITEMAP": MAGENTA,
     "INGEST": CYAN,
     "KLASS": BLUE,
+    "RECONCILE": MAGENTA + BOLD,
     "BLURB": GREEN,
     "FACET": YELLOW,
     "QUEUE": DIM,
@@ -59,6 +60,7 @@ STATION_QUEUES = {
     "SITEMAP": "check_sitemap_q",
     "INGEST": "ingest_q",
     "KLASS": "klass_q",
+    "RECONCILE": "klass_reconcile_q",
     "BLURB": "klass_blurb_q",
     "FACET": "facet_blurb_q",
 }
@@ -691,6 +693,242 @@ Examples:
         )
 
     return {"url": url, "inferred_klass": inferred_klass, "status": "done"}
+
+# ==============================================================================
+# STATION 3B: TAXONOMY RECONCILIATION & RESOLUTION WORKER (klass_reconcile_q)
+# ==============================================================================
+import difflib
+
+def resolve_canonical_root(db, target_slug: str, max_hops: int = 10) -> str:
+    """
+    Traverses klass_metadata to ensure aliases always point to the ultimate canonical root.
+    Prevents chains (A -> B -> C becomes A -> C) and circular references.
+    """
+    curr = target_slug
+    visited = {curr}
+    for _ in range(max_hops):
+        doc = db["klass_metadata"].find_one({"_id": curr})
+        if not doc or doc.get("status") != "alias":
+            break
+        canonical = doc.get("canonical_klass")
+        if not canonical or canonical in visited:
+            break
+        visited.add(canonical)
+        curr = canonical
+    return curr
+
+_candidate_index_cache = None
+_candidate_index_time = 0
+
+def get_reconcile_candidate_index(db, max_age_secs: int = 60):
+    global _candidate_index_cache, _candidate_index_time
+    now = time.time()
+    if _candidate_index_cache is None or (now - _candidate_index_time) > max_age_secs:
+        pipeline = [
+            {"$match": {"inferred_klass": {"$nin": [None, ""]}}},
+            {"$group": {"_id": "$inferred_klass", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}}
+        ]
+        raw_counts = list(db["source_products"].aggregate(pipeline))
+        metadata_map = {doc["_id"]: doc for doc in db["klass_metadata"].find({}, {"_id": 1, "status": 1, "canonical_klass": 1})}
+        
+        candidates = []
+        for item in raw_counts:
+            slug = item["_id"]
+            count = item["count"]
+            meta = metadata_map.get(slug, {})
+            if meta.get("status") == "alias":
+                continue
+            tokens = slug.replace("-", "_").split("_")
+            head_noun = tokens[-1] if tokens else ""
+            candidates.append({
+                "slug": slug,
+                "count": count,
+                "tokens": set(tokens),
+                "head_noun": head_noun,
+                "status": meta.get("status", "canonical" if count >= 10 else "provisional")
+            })
+        _candidate_index_cache = candidates
+        _candidate_index_time = now
+    return _candidate_index_cache
+
+def find_nearest_candidates(proposed_slug: str, candidate_index: list, top_n: int = 6, min_score: float = 0.40) -> list:
+    prop_clean = proposed_slug.replace("-", "_")
+    prop_tokens = set(prop_clean.split("_"))
+    prop_head = prop_clean.split("_")[-1]
+    
+    scored = []
+    for cand in candidate_index:
+        cand_slug = cand["slug"]
+        if cand_slug == prop_clean:
+            continue
+            
+        cand_tokens = cand["tokens"]
+        cand_head = cand["head_noun"]
+        overlap = len(prop_tokens & cand_tokens)
+        
+        jaccard = overlap / len(prop_tokens | cand_tokens) if (prop_tokens | cand_tokens) else 0
+        sub_bonus = 0.4 if (cand_slug in prop_clean or prop_clean in cand_slug) else 0
+        seq_ratio = difflib.SequenceMatcher(None, prop_clean, cand_slug).ratio()
+        head_bonus = 0.25 if (prop_head == cand_head or prop_head.rstrip('s') == cand_head.rstrip('s')) else 0.0
+        
+        import math
+        vol_score = math.log10(cand["count"] + 1) * 0.04
+        total_score = (jaccard * 0.35) + sub_bonus + (seq_ratio * 0.30) + head_bonus + vol_score
+        
+        if total_score >= min_score:
+            scored.append((total_score, cand))
+            
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [item[1] for item in scored[:top_n]]
+
+@app.task(name="tasks.reconcile_klass", bind=True, max_retries=2, default_retry_delay=30)
+def reconcile_klass(self, proposed_klass_slug: str):
+    db = get_mongo_db()
+    source_products_col = db["source_products"]
+    klass_metadata_col = db["klass_metadata"]
+    
+    proposed_clean = proposed_klass_slug.replace("-", "_").strip()
+    
+    # 1. Gather product count & samples for this proposed klass
+    matching_docs = list(source_products_col.find(
+        {"$or": [{"inferred_klass": proposed_clean}, {"inferred_klass": proposed_klass_slug}, {"proposed_klass": proposed_clean}]},
+        {"_id": 1, "title": 1, "proposed_klass": 1}
+    ))
+    total_count = len(matching_docs)
+    sample_titles = [d.get("title", "") for d in matching_docs[:3] if d.get("title")]
+    sample_str = f"\"{sample_titles[0]}\"" if sample_titles else f"\"{proposed_clean}\""
+    
+    factory_log("RECONCILE", f"{proposed_clean} [{total_count}]")
+    if sample_titles:
+        factory_log("RECONCILE", f"samples: {sample_str}")
+        
+    cand_index = get_reconcile_candidate_index(db)
+    candidates = find_nearest_candidates(proposed_clean, cand_index, top_n=5, min_score=0.40)
+    
+    decision = "KEEP"
+    target_canonical = proposed_clean
+    
+    if not candidates:
+        factory_log("RECONCILE", f"nearest candidates weak -> KEEP")
+    else:
+        cand_summary = ", ".join([f"{c['slug']} [{c['count']}]" for c in candidates[:3]])
+        factory_log("RECONCILE", f"candidates: {cand_summary}")
+        
+        cand_lines = "\n".join([f"  • {c['slug']} ({c['count']} products)" for c in candidates])
+        valid_slugs = set(c['slug'] for c in candidates)
+        
+        prompt = f"""You are an expert clinical taxonomy resolver for an industrial healthcare catalog.
+
+PROPOSED CATEGORY TO EVALUATE:
+"{proposed_clean}"
+
+SAMPLE PRODUCTS:
+{chr(10).join(f"- {t}" for t in sample_titles)}
+
+CANDIDATE CATEGORIES:
+{cand_lines}
+
+TASK:
+Determine if "{proposed_clean}" is a synonym, sub-variant, or specific wording of ONE of the candidate categories above, OR if it is a GENUINELY DISTINCT category that must remain separate.
+
+CRITICAL RULES:
+1. MERGE only if the item is genuinely the same clinical product type or a direct sub-type (e.g. "powered_exam_table" -> "exam_table", "nitrile_examination_glove" -> "exam_glove").
+2. If NONE of the candidates match the true nature of this item (e.g. an "incubator" is NOT a "cart" or "table", a "microscope" is NOT a "scale"), you MUST output: KEEP.
+3. Output EXACTLY one line: "MERGE <candidate_slug>" (using a slug from the candidate list) OR "KEEP".
+"""
+        try:
+            resp = requests.post(
+                f"{OLLAMA_HOST}/api/generate",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.0, "num_predict": 30}
+                },
+                timeout=30
+            )
+            raw_out = resp.json().get("response", "").strip()
+            
+            match = re.search(r'\bMERGE\s+([a-zA-Z0-9_\-]+)', raw_out, re.IGNORECASE)
+            if match:
+                chosen_slug = match.group(1).lower().replace("-", "_")
+                if chosen_slug in valid_slugs:
+                    target_canonical = resolve_canonical_root(db, chosen_slug)
+                    decision = f"MERGE {target_canonical}"
+                else:
+                    decision = "KEEP"
+                    target_canonical = proposed_clean
+            elif "KEEP" in raw_out.upper():
+                decision = "KEEP"
+                target_canonical = proposed_clean
+        except Exception as e:
+            factory_log("ERROR", f"Resolution LLM error for {proposed_clean}: {e}")
+            decision = "KEEP"
+            target_canonical = proposed_clean
+
+    factory_log("RECONCILE", f"Granite -> {decision}")
+    
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    
+    # Update klass_metadata authority
+    if target_canonical != proposed_clean:
+        klass_metadata_col.update_one(
+            {"_id": proposed_clean},
+            {
+                "$set": {
+                    "canonical_klass": target_canonical,
+                    "status": "alias",
+                    "product_count_at_decision": total_count,
+                    "resolved_at": now,
+                    "model": OLLAMA_MODEL,
+                    "resolver_version": 1
+                }
+            },
+            upsert=True
+        )
+        klass_metadata_col.update_one(
+            {"_id": target_canonical},
+            {"$set": {"canonical_klass": target_canonical, "status": "canonical"}},
+            upsert=True
+        )
+        factory_log("RECONCILE", f"{proposed_clean} -> {target_canonical}")
+    else:
+        klass_metadata_col.update_one(
+            {"_id": proposed_clean},
+            {
+                "$set": {
+                    "canonical_klass": proposed_clean,
+                    "status": "canonical",
+                    "resolved_at": now,
+                    "model": OLLAMA_MODEL,
+                    "resolver_version": 1
+                }
+            },
+            upsert=True
+        )
+        
+    # Update matching source_products: preserve proposed_klass, set canonical_klass & inferred_klass
+    if matching_docs:
+        source_products_col.update_many(
+            {"_id": {"$in": [d["_id"] for d in matching_docs]}},
+            {
+                "$set": {
+                    "canonical_klass": target_canonical,
+                    "inferred_klass": target_canonical
+                }
+            }
+        )
+        # Ensure proposed_klass is recorded if it wasn't there before
+        source_products_col.update_many(
+            {"_id": {"$in": [d["_id"] for d in matching_docs]}, "proposed_klass": {"$exists": False}},
+            {"$set": {"proposed_klass": proposed_clean}}
+        )
+        
+    factory_log("RECONCILE", f"updated {len(matching_docs)} product(s)")
+    factory_log("DONE", f"canonical={target_canonical}", blank_after=True)
+    
+    return {"proposed": proposed_clean, "canonical": target_canonical, "decision": decision, "updated": len(matching_docs)}
 
 # ==============================================================================
 # STATION 4: LLM KLASS BLURB SYNTHESIZER WORKER (klass_blurb_q)

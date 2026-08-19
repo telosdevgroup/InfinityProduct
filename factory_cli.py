@@ -17,7 +17,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from core import celery_app
-from core.tasks import check_sitemap, sync_source_catalog, ingest_product_url, infer_klass, generate_klass_blurb, slugify, format_title
+from core.tasks import check_sitemap, sync_source_catalog, ingest_product_url, infer_klass, reconcile_klass, generate_klass_blurb, slugify, format_title
 
 MONGO_URI = "mongodb://localhost:27017/"
 DB_NAME = "infinityproduct_dev"
@@ -39,6 +39,7 @@ STATION_COLORS = {
     "SITEMAP": MAGENTA,
     "INGEST": CYAN,
     "KLASS": BLUE,
+    "RECONCILE": MAGENTA + BOLD,
     "FACET": YELLOW,
     "BLURB": GREEN,
     "QUEUE": DIM,
@@ -152,6 +153,116 @@ def action_enqueue_missing():
         print(f"{GREEN}[OK] All discovered products are already ingested.{RESET}")
     time.sleep(1.2)
 
+def action_enqueue_unclassified():
+    db = get_db()
+    unclassified = list(db["source_products"].find(
+        {"$or": [{"inferred_klass": None}, {"inferred_klass": ""}, {"status": "ingested"}]},
+        {"source_url": 1}
+    ))
+    print(f"\nUnclassified Products: {len(unclassified):,}")
+    if unclassified:
+        for doc in unclassified:
+            infer_klass.delay(doc["source_url"])
+        print(f"{GREEN}[OK] Enqueued {len(unclassified):,} products into 'klass_q'!{RESET}")
+    else:
+        print(f"{GREEN}[OK] All products are already classified.{RESET}")
+    time.sleep(1.5)
+
+def action_reconcile_taxonomy():
+    db = get_db()
+    pipeline = [
+        {"$match": {"inferred_klass": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$inferred_klass", "count": {"$sum": 1}}},
+        {"$sort": {"count": 1}}
+    ]
+    all_klasses = list(db["source_products"].aggregate(pipeline))
+    metadata_map = {doc["_id"]: doc for doc in db["klass_metadata"].find({}, {"_id": 1, "status": 1})}
+    
+    unreconciled = [k for k in all_klasses if metadata_map.get(k["_id"], {}).get("status") not in ["alias", "canonical"]]
+    
+    singletons = [k for k in unreconciled if k["count"] == 1]
+    small = [k for k in unreconciled if 1 <= k["count"] <= 4]
+    all_targets = [k for k in unreconciled if k["count"] < 25]
+
+    print(f"\n{BOLD}{CYAN}==============================================================================={RESET}")
+    print(f"{BOLD}{CYAN} 🔄 RECONCILIATION BATCH DISPATCHER (Station 3B) {RESET}")
+    print(f"{BOLD}{CYAN}==============================================================================={RESET}")
+    print(f" Total Unreconciled Categories: {BOLD}{len(unreconciled):,}{RESET}")
+    print(f"  [{BOLD}1{RESET}] 🎯 Enqueue {BOLD}Singletons Only{RESET} ({len(singletons):,} Klasses with 1 product)")
+    print(f"  [{BOLD}2{RESET}] 📦 Enqueue {BOLD}Small Klasses (1–4 products){RESET} ({len(small):,} Klasses)")
+    print(f"  [{BOLD}3{RESET}] 🚀 Enqueue {BOLD}All Low/Medium Volume (<25 products){RESET} ({len(all_targets):,} Klasses)")
+    print(f"  [{BOLD}4{RESET}] ✏️  Reconcile a Specific Klass Slug")
+    print(f"  [{BOLD}0{RESET}] ↩️  Back")
+    print(f"{BOLD}{CYAN}==============================================================================={RESET}")
+
+    sub_choice = input(f"{BOLD}Select target batch [1-4, 0 to back]: {RESET}").strip()
+    
+    target_pool = []
+    if sub_choice == "1":
+        target_pool = singletons
+    elif sub_choice == "2":
+        target_pool = small
+    elif sub_choice == "3":
+        target_pool = all_targets
+    elif sub_choice == "4":
+        custom = input(f"{BOLD}Enter Klass slug to reconcile: {RESET}").strip()
+        if custom:
+            target_pool = [{"_id": slugify(custom)}]
+    else:
+        return
+
+    if not target_pool:
+        print(f"\n{YELLOW}No unreconciled categories found in selected batch.{RESET}")
+        time.sleep(1.2)
+        return
+
+    count = 0
+    for k in target_pool:
+        reconcile_klass.delay(k["_id"])
+        count += 1
+
+    print(f"\n{GREEN}[OK] Enqueued {count:,} Klasses into 'klass_reconcile_q'!{RESET}")
+    print(f"{DIM}Station 3B (Granite 4.1:8B) will resolve each into canonical roots in real time.{RESET}")
+    time.sleep(1.5)
+
+def action_taxonomy_distribution():
+    db = get_db()
+    pipeline = [
+        {"$match": {"inferred_klass": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$inferred_klass", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}}
+    ]
+    all_klasses = list(db["source_products"].aggregate(pipeline))
+    total_products = db["source_products"].count_documents({})
+    total_klasses = len(all_klasses)
+    
+    singletons = [k for k in all_klasses if k["count"] == 1]
+    small = [k for k in all_klasses if 2 <= k["count"] <= 4]
+    medium = [k for k in all_klasses if 5 <= k["count"] <= 20]
+    large = [k for k in all_klasses if k["count"] > 20]
+    
+    aliases_count = db["klass_metadata"].count_documents({"status": "alias"})
+    canonical_count = db["klass_metadata"].count_documents({"status": "canonical"})
+
+    print(f"\n{BOLD}{CYAN}==============================================================================={RESET}")
+    print(f"{BOLD}{CYAN} 📊 TAXONOMY DISTRIBUTION & RECONCILIATION TELEMETRY {RESET}")
+    print(f"{BOLD}{CYAN}==============================================================================={RESET}")
+    print(f" Total Products:       {BOLD}{total_products:,}{RESET}")
+    print(f" Total Active Klasses: {BOLD}{total_klasses:,}{RESET}")
+    print(f" Resolved Aliases:     {GREEN}{aliases_count:,}{RESET}")
+    print(f" Canonical Roots:      {GREEN}{canonical_count:,}{RESET}")
+    print(f"{DIM}-------------------------------------------------------------------------------{RESET}")
+    print(f"   • Singletons (1 product):       {BOLD}{len(singletons):,}{RESET} ({round(len(singletons)/max(total_klasses,1)*100, 1)}%)")
+    print(f"   • Small Klasses (2–4 prods):    {BOLD}{len(small):,}{RESET} ({round(len(small)/max(total_klasses,1)*100, 1)}%)")
+    print(f"   • Medium Klasses (5–20 prods):  {BOLD}{len(medium):,}{RESET} ({round(len(medium)/max(total_klasses,1)*100, 1)}%)")
+    print(f"   • Large Klasses (>20 prods):    {BOLD}{len(large):,}{RESET} ({round(len(large)/max(total_klasses,1)*100, 1)}%)")
+    print(f"{DIM}-------------------------------------------------------------------------------{RESET}")
+    print(f"{BOLD}Top 10 Canonical Categories:{RESET}")
+    for idx, k in enumerate(all_klasses[:10], 1):
+        print(f"  [{BOLD}{idx:2d}{RESET}] {k['_id']:<32} -> {k['count']:,} products")
+    print(f"{BOLD}{CYAN}==============================================================================={RESET}")
+    input(f"\n{DIM}Press Enter to return to menu...{RESET}")
+
 def action_synthesize_single_klass():
     db = get_db()
     pipeline = [
@@ -195,21 +306,6 @@ def action_synthesize_single_klass():
     generate_klass_blurb.delay(target_slug)
     time.sleep(1.5)
 
-def action_enqueue_unclassified():
-    db = get_db()
-    unclassified = list(db["source_products"].find(
-        {"$or": [{"inferred_klass": None}, {"inferred_klass": ""}, {"status": "ingested"}]},
-        {"source_url": 1}
-    ))
-    print(f"\nUnclassified Products: {len(unclassified):,}")
-    if unclassified:
-        for doc in unclassified:
-            infer_klass.delay(doc["source_url"])
-        print(f"{GREEN}[OK] Enqueued {len(unclassified):,} products into 'klass_q'!{RESET}")
-    else:
-        print(f"{GREEN}[OK] All products are already classified.{RESET}")
-    time.sleep(1.5)
-
 def action_clear_log():
     try:
         with open(LOG_FILE_PATH, "w", encoding="utf-8") as f:
@@ -236,12 +332,14 @@ def main():
             print(f" [{BOLD}2{RESET}] 🔍 {BOLD}Trigger Sitemap Discovery{RESET} (Station 1)")
             print(f" [{BOLD}3{RESET}] 🚀 {BOLD}Enqueue Remaining Products for Ingest{RESET} (Station 2)")
             print(f" [{BOLD}4{RESET}] 🤖 {BOLD}Queue All Unclassified to LLM Classifier{RESET} (Station 3)")
-            print(f" [{BOLD}5{RESET}] 🎯 {BOLD}Queue ONE Specific Klass (Auto-Cascades Facet Blurbs){RESET} (Station 4+5)")
-            print(f" [{BOLD}6{RESET}] 🧹 {BOLD}Clear Log Screen / Reset Log File{RESET}")
+            print(f" [{BOLD}5{RESET}] 🔄 {BOLD}Reconcile Fragmented Taxonomy (Station 3B){RESET}")
+            print(f" [{BOLD}6{RESET}] 📊 {BOLD}View Taxonomy Distribution Breakdown{RESET}")
+            print(f" [{BOLD}7{RESET}] 🎯 {BOLD}Queue ONE Specific Klass (Auto-Cascades Facet Blurbs){RESET} (Station 4+5)")
+            print(f" [{BOLD}8{RESET}] 🧹 {BOLD}Clear Log Screen / Reset Log File{RESET}")
             print(f" [{BOLD}0{RESET}] 🚪 {BOLD}Exit to Shell{RESET}")
             print(f"{BOLD}{CYAN}==============================================================================={RESET}")
 
-            choice = input(f"{BOLD}Select an action [1-6, 0 to exit]: {RESET}").strip()
+            choice = input(f"{BOLD}Select an action [1-8, 0 to exit]: {RESET}").strip()
 
             if choice == "1" or choice == "":
                 continue
@@ -252,8 +350,12 @@ def main():
             elif choice == "4":
                 action_enqueue_unclassified()
             elif choice == "5":
-                action_synthesize_single_klass()
+                action_reconcile_taxonomy()
             elif choice == "6":
+                action_taxonomy_distribution()
+            elif choice == "7":
+                action_synthesize_single_klass()
+            elif choice == "8":
                 action_clear_log()
             elif choice in ["0", "q", "exit", "quit"]:
                 print(f"\n{GREEN}Exiting Factory Console.{RESET}\n")

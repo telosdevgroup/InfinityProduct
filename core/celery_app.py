@@ -49,6 +49,8 @@ app.conf.update(
         "tasks.ingest_product_url": {"queue": "ingest_q"},
         "core.tasks.infer_klass": {"queue": "klass_q"},
         "tasks.infer_klass": {"queue": "klass_q"},
+        "core.tasks.reconcile_klass": {"queue": "klass_reconcile_q"},
+        "tasks.reconcile_klass": {"queue": "klass_reconcile_q"},
         "core.tasks.generate_klass_blurb": {"queue": "klass_blurb_q"},
         "tasks.generate_klass_blurb": {"queue": "klass_blurb_q"},
         "core.tasks.generate_facet_value_blurb": {"queue": "facet_blurb_q"},

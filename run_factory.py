@@ -18,6 +18,7 @@ WORKERS = [
     {"name": "Station 1: Sitemap Discovery", "script": os.path.join("workers", "worker_sitemap.py"), "queue": "check_sitemap_q"},
     {"name": "Station 2: Ingestion & Facets", "script": os.path.join("workers", "worker_ingest.py"),  "queue": "ingest_q"},
     {"name": "Station 3: LLM Klass Classifier", "script": os.path.join("workers", "worker_klass.py"), "queue": "klass_q"},
+    {"name": "Station 3B: Taxonomy Reconciler", "script": os.path.join("workers", "worker_reconcile.py"), "queue": "klass_reconcile_q"},
     {"name": "Station 4: LLM Blurb Synthesizer", "script": os.path.join("workers", "worker_klass_blurb.py"), "queue": "klass_blurb_q"},
     {"name": "Station 5: Facet Blurb Synthesizer", "script": os.path.join("workers", "worker_facet_blurb.py"), "queue": "facet_blurb_q"},
 ]
