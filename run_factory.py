@@ -36,11 +36,6 @@ def stream_worker_output(proc, name):
             clean = re.sub(r'^\[\d{4}-\d{2}-\d{2}\s+[\d:,]+\s+[A-Z]+/[A-Za-z0-9_]+\]\s*', '', clean)
             if clean:
                 print(clean, flush=True)
-                try:
-                    with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
-                        f.write(clean + "\n")
-                except Exception:
-                    pass
     proc.stdout.close()
 
 def start_worker(item):
