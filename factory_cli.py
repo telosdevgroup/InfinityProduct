@@ -195,13 +195,28 @@ def action_synthesize_single_klass():
     generate_klass_blurb.delay(target_slug)
     time.sleep(1.5)
 
+def action_enqueue_unclassified():
+    db = get_db()
+    unclassified = list(db["source_products"].find(
+        {"$or": [{"inferred_klass": None}, {"inferred_klass": ""}, {"status": "ingested"}]},
+        {"source_url": 1}
+    ))
+    print(f"\nUnclassified Products: {len(unclassified):,}")
+    if unclassified:
+        for doc in unclassified:
+            infer_klass.delay(doc["source_url"])
+        print(f"{GREEN}[OK] Enqueued {len(unclassified):,} products into 'klass_q'!{RESET}")
+    else:
+        print(f"{GREEN}[OK] All products are already classified.{RESET}")
+    time.sleep(1.5)
+
 def action_clear_log():
     try:
         with open(LOG_FILE_PATH, "w", encoding="utf-8") as f:
             f.write("")
         print(f"\n{GREEN}[OK] Factory stream log cleared.{RESET}")
     except Exception as e:
-        print(f"\n{RED}Error clearing log: {e}{RESET}")
+        print(f"\n{RED}[!] Error clearing log: {e}{RESET}")
     time.sleep(0.8)
 
 def main():
@@ -219,13 +234,14 @@ def main():
             print(f"{BOLD}{CYAN}==============================================================================={RESET}")
             print(f" [{BOLD}1{RESET}] 📺 {BOLD}Resume Live Log Stream{RESET}")
             print(f" [{BOLD}2{RESET}] 🔍 {BOLD}Trigger Sitemap Discovery{RESET} (Station 1)")
-            print(f" [{BOLD}3{RESET}] 🚀 {BOLD}Enqueue Remaining Products{RESET} (Station 2)")
-            print(f" [{BOLD}4{RESET}] 🎯 {BOLD}Queue ONE Specific Klass (Auto-Cascades Facet Blurbs){RESET}")
-            print(f" [{BOLD}5{RESET}] 🧹 {BOLD}Clear Log Screen / Reset Log File{RESET}")
+            print(f" [{BOLD}3{RESET}] 🚀 {BOLD}Enqueue Remaining Products for Ingest{RESET} (Station 2)")
+            print(f" [{BOLD}4{RESET}] 🤖 {BOLD}Queue All Unclassified to LLM Classifier{RESET} (Station 3)")
+            print(f" [{BOLD}5{RESET}] 🎯 {BOLD}Queue ONE Specific Klass (Auto-Cascades Facet Blurbs){RESET} (Station 4+5)")
+            print(f" [{BOLD}6{RESET}] 🧹 {BOLD}Clear Log Screen / Reset Log File{RESET}")
             print(f" [{BOLD}0{RESET}] 🚪 {BOLD}Exit to Shell{RESET}")
             print(f"{BOLD}{CYAN}==============================================================================={RESET}")
 
-            choice = input(f"{BOLD}Select an action [1-5, 0 to exit]: {RESET}").strip()
+            choice = input(f"{BOLD}Select an action [1-6, 0 to exit]: {RESET}").strip()
 
             if choice == "1" or choice == "":
                 continue
@@ -234,8 +250,10 @@ def main():
             elif choice == "3":
                 action_enqueue_missing()
             elif choice == "4":
-                action_synthesize_single_klass()
+                action_enqueue_unclassified()
             elif choice == "5":
+                action_synthesize_single_klass()
+            elif choice == "6":
                 action_clear_log()
             elif choice in ["0", "q", "exit", "quit"]:
                 print(f"\n{GREEN}Exiting Factory Console.{RESET}\n")
