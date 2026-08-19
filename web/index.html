@@ -649,7 +649,12 @@
         if (data.blurb) {
           // Single-pass Wikipedia-style entity linker (prevents nested tag corruption)
           const entityMap = new Map();
+          const EXCLUDED_LINK_GROUPS = new Set(["vendor", "brand", "manufacturer", "distributor"]);
           (data.facet_groups || []).forEach(g => {
+            const groupKey = (g.key || g.slug || g.label || "").toLowerCase();
+            if (EXCLUDED_LINK_GROUPS.has(groupKey)) {
+              return; // Do not link commercial vendors
+            }
             (g.values || []).forEach(v => {
               if (v.value && v.value.length > 2) {
                 const lower = v.value.toLowerCase();
