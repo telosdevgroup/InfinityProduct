@@ -596,13 +596,20 @@ def infer_klass(self, url: str):
     # ==========================================================================
     # STATION 3: LLM TAXONOMIC CLASSIFICATION (Granite 4.1:8B)
     # ==========================================================================
-    vendor = product.get("vendor", "")
-    system_prompt = """You are a medical device taxonomist. Classify the product into a generic canonical product class (singular snake_case).
-Rules:
-1. Remove all brand names, manufacturers, and trademarks (e.g. McKesson, BD, Stifneck, DuoDerm, SharpSafety, Bactoshield, 3M, Covidien).
-2. Remove all sizes, gauges, dimensions, and colors (e.g. adult, 21G, 18 inch, 4x4, large, blue, 10 quart).
-3. Return only the generic device/supply category slug. Examples: stethoscope, sphygmomanometer, cervical_collar, sharps_container, surgical_gown, grab_bar, hypodermic_needle, exam_glove, alginate_dressing, foam_dressing, surgical_scrub.
-4. Output ONLY the lowercase snake_case slug, with no extra text or explanation."""
+    system_prompt = """You are a medical product classification system. Your task is to identify the core physical product type (noun phrase in singular snake_case).
+
+Instructions:
+- Look at the actual physical object being sold (e.g. solution, glove, dressing, catheter, needle, sponge, drape, mask, tubing, tape, scrub, container, underpad).
+- Remove all brand names (McKesson, 3M, BD, Curity, Ansell) and sizes/dimensions (16 oz, 4x4, Small, 21G).
+- Output ONLY the single lowercase snake_case term with no extra text or punctuation.
+
+Examples:
+- "BD Eclipse Hypodermic Needle with Safety Cover 21G" -> hypodermic_needle
+- "3M Tegaderm Transparent Film Dressing 4x4" -> transparent_film_dressing
+- "Betadine Povidone-Iodine Antiseptic Solution 8 oz" -> antiseptic_solution
+- "McKesson Microbicide Antiseptic PVP Scrub Solution" -> antiseptic_scrub_solution
+- "Halyard Purple Nitrile Exam Gloves Medium" -> exam_glove
+- "ComfortFoam Border Lite Silicone Adhesive Foam Dressing" -> foam_dressing"""
 
     inferred_klass = None
     try:
@@ -611,7 +618,7 @@ Rules:
             json={
                 "model": OLLAMA_MODEL,
                 "system": system_prompt,
-                "prompt": f"Product: {title}\nVendor: {vendor}\n\nCanonical Klass:",
+                "prompt": f"Product: {title}\nClassification:",
                 "options": {
                     "temperature": 0.0,
                     "num_predict": 10,
