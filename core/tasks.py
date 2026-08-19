@@ -618,26 +618,32 @@ def infer_klass(self, url: str):
     inferred_klass = None
 
     # ==========================================================================
-    # STATION 3: LLM TAXONOMIC CLASSIFICATION (Granite 4.1:8B + Full Shopify Context)
+    # STATION 3: 1-2 WORD GENERAL PURPOSE CLINICAL ONTOLOGY (Granite 4.1:8B)
     # ==========================================================================
-    system_prompt = """You are an expert healthcare product taxonomy classifier.
-Your task is to classify medical and clinical products into a clean, standardized canonical product category (1 to 3 words, singular snake_case).
+    system_prompt = """You are a master healthcare taxonomy curator.
+Your task is to classify medical and clinical supplies into a broad, general-purpose clinical ontology (strictly 1 to 2 words, singular snake_case).
 
-CRITICAL TAXONOMY RULES:
-1. Identify the core noun of the physical object or substance (e.g. activated_charcoal, exam_table, exam_glove, hypodermic_needle, ultrasound_gel).
-2. DO NOT append functional marketing phrases (remove: "poison absorbent", "skin protectant", "odor eliminator", "pain relief", "moisture barrier"). Output the core substance/item (e.g. "activated_charcoal", "petroleum_jelly", "barrier_cream").
-3. DO NOT output single generic words without qualification (NEVER output: gel, paper, tray, bag, pump, lock, rack, device, system, pad, part).
-4. DO NOT output 5-word attribute descriptions (NEVER include: sterile, non-sterile, luer_slip, reusable, 4x4, 100_pack, blue, extra_large).
-5. Use the Shopify Category hierarchy, Vendor, and Product Description to ground the true product type.
-6. Output ONLY the single snake_case category term.
+CRITICAL ONTOLOGY RULES:
+1. MAX 1 TO 2 WORDS (e.g. enteral_formula, foam_dressing, adhesive_dressing, exam_glove, aspirin, barium_cup, vitamin_supplement, electrocardiograph, storage_bottle, test_kit, exam_table).
+2. ZERO BRAND / TRADE NAMES: Strip all brand and manufacturer names (remove: Aquacel, Primapore, ConvaFoam, Compleat, KardiaMobile, Wolf, Abbott, Major, QuickVue, Welch Allyn, 3M, BD, Clinton).
+3. ZERO FLAVORS / SCENTS / FOOD: Strip all food and flavor names (remove: chicken, garden, orange, vanilla, mint, strawberry).
+4. ZERO PRODUCT ATTRIBUTES: Strip all specs, packaging, and materials (remove: silicone, gelling fiber, border, extra, low dose, chewable, organic, pediatric, 10oz, 24/cs).
+5. Output ONLY the 1-2 word snake_case category term.
 
 FEW-SHOT EXAMPLES:
-- "Actidose-Aqua Activated Charcoal Poison Absorbent" -> activated_charcoal
-- "BD Eclipse Hypodermic Needle with Safety Cover 21G" -> hypodermic_needle
-- "3M Tegaderm Transparent Film Dressing 4x4" -> transparent_film_dressing
-- "Clinton Industries Power Hi-Lo Bariatric Exam Table with Stirrups" -> exam_table
-- "Welch Allyn Green Series 777 Wall Transformer Diagnostic System" -> diagnostic_wall_transformer
-- "McKesson Confiderm Nitrile Exam Gloves Powder-Free Large" -> exam_glove"""
+- "FORMULA, COMPLEAT ORGANIC CHICKEN GARDEN PED 10.1OZ" -> enteral_formula
+- "Aquacel Extra Gelling Fiber Wound Dressing" -> wound_dressing
+- "Primapore White Adhesive Dressing" -> adhesive_dressing
+- "DRESSING, WOUND CONVAFOAM ADH SIL" -> foam_dressing
+- "Aquacel Silicone Adhesive with Border Silicone Foam Dressing" -> foam_dressing
+- "Major Low Dose Chewable Aspirin, Orange Flavor" -> aspirin
+- "Wolf Barium Cup, 14-ounce capacity" -> barium_cup
+- "VITAMIN B12, TAB 500MCG" -> vitamin_supplement
+- "KardiaMobile Electrocardiograph" -> electrocardiograph
+- "Abbott Nutrition Breast Milk Storage Bottle" -> storage_bottle
+- "Micro-Touch Extended Cuff Length Exam Glove" -> exam_glove
+- "QuickVue iFOB or FIT Colorectal Cancer Screening Test Kit" -> fecal_test_kit
+- "Clinton Industries Power Hi-Lo Bariatric Exam Table" -> exam_table"""
 
     user_prompt = f"""PRODUCT DETAILS:
 Title: {title}
@@ -646,7 +652,7 @@ Vendor: {vendor}
 Tags: {', '.join(tags) if isinstance(tags, list) else tags}
 Description: {clean_body}
 
-Canonical Product Category:"""
+General Product Category:"""
 
     try:
         resp = requests.post(
@@ -657,7 +663,7 @@ Canonical Product Category:"""
                 "prompt": user_prompt,
                 "options": {
                     "temperature": 0.0,
-                    "num_predict": 15,
+                    "num_predict": 10,
                     "num_ctx": 2048
                 },
                 "keep_alive": "1h",
@@ -670,14 +676,19 @@ Canonical Product Category:"""
             slug = raw_out.lower().replace(" ", "_").replace("-", "_")
             slug = slug.split("\n")[0].split(":")[-1].strip(". '\"`")
             slug = re.sub(r'[^a-z0-9_]', '', slug)
+            
+            # Post-processing guardrail: clamp to max 2 words if model outputs a 3+ word phrase
+            words = [w for w in slug.split("_") if w]
+            if len(words) > 2:
+                slug = "_".join(words[-2:])
+                
             if slug and len(slug) >= 3:
                 inferred_klass = slug
     except Exception as e:
         factory_log("ERROR", f"LLM inference failed for {title}: {e}")
 
     if not inferred_klass:
-        # Fallback slug if LLM request failed
-        inferred_klass = slugify(title.split()[0]) if title else "unclassified"
+        inferred_klass = "medical_supply"
 
     now = datetime.datetime.now(datetime.timezone.utc)
     source_products_col.update_one(
@@ -685,13 +696,17 @@ Canonical Product Category:"""
         {
             "$set": {
                 "inferred_klass": inferred_klass,
+                "canonical_klass": inferred_klass,
+                "proposed_klass": inferred_klass,
                 "inferred_at": now.isoformat(),
                 "status": "done"
             }
         }
     )
 
-    factory_log("KLASS", f"\"{title}\" -> {inferred_klass}")
+    # Clean, multi-line visual logging with blank line separator
+    factory_log("KLASS", f"\"{title}\"")
+    factory_log("KLASS", f"-> {inferred_klass}")
     factory_log("DONE", f"product={url} complete", blank_after=True)
 
     # Record discovered Klass metadata without triggering blurb generation
