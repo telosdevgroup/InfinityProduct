@@ -54,28 +54,31 @@ def get_redis():
     return redis.Redis(host="localhost", port=6379, db=0, protocol=2)
 
 def colorize_log_line(line: str) -> str:
-    """Applies ANSI syntax highlighting to raw log lines."""
+    """Applies ANSI syntax highlighting to raw log lines without timestamp."""
     import re
     line = line.rstrip("\r\n")
     if not line:
         return ""
 
-    # Match: [HH:MM:SS] BADGE (N)   Message OR [HH:MM:SS] BADGE   Message
-    m = re.match(r'^\[(\d{2}:\d{2}:\d{2})\]\s+([A-Z]+(?:\s+\([\d,]+\))?)\s+(.*)$', line)
+    # Strip any legacy [HH:MM:SS] if present
+    line = re.sub(r'^\[\d{2}:\d{2}:\d{2}\]\s*', '', line)
+
+    # Match: BADGE (N)   Message OR BADGE   Message
+    m = re.match(r'^([A-Z]+(?:\s+\([\d,]+\))?)\s+(.*)$', line)
     if m:
-        ts, full_badge, msg = m.groups()
+        full_badge, msg = m.groups()
         base_badge = full_badge.split()[0]
         color = STATION_COLORS.get(base_badge, "")
         formatted_badge = f"{color}{full_badge:<15}{RESET}"
         
         if base_badge == "DONE":
-            return f"{DIM}[{ts}]{RESET} {formatted_badge} {GREEN}{msg}{RESET}"
+            return f"{formatted_badge} {GREEN}{msg}{RESET}"
         elif base_badge == "ERROR":
-            return f"{DIM}[{ts}]{RESET} {formatted_badge} {RED}{BOLD}{msg}{RESET}"
+            return f"{formatted_badge} {RED}{BOLD}{msg}{RESET}"
         elif base_badge == "QUEUE":
-            return f"{DIM}[{ts}]{RESET} {formatted_badge} {DIM}{msg}{RESET}"
+            return f"{formatted_badge} {DIM}{msg}{RESET}"
         else:
-            return f"{DIM}[{ts}]{RESET} {formatted_badge} {msg}"
+            return f"{formatted_badge} {msg}"
 
     return line
 

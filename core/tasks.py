@@ -76,10 +76,9 @@ def _get_redis_log_client():
 
 def factory_log(station: str, message: str):
     """
-    Emits loud, timestamped, colorized factory logs with real-time queue depth (N)
-    to stdout and appends to factory_stream.log.
+    Emits loud, colorized factory logs with real-time queue depth (N)
+    to stdout and appends to factory_stream.log without timestamp clutter.
     """
-    ts = datetime.datetime.now().strftime("%H:%M:%S")
     color = STATION_COLORS.get(station, "")
     
     depth_str = ""
@@ -95,8 +94,8 @@ def factory_log(station: str, message: str):
 
     badge_text = f"{station}{depth_str}"
     badge = f"{color}{badge_text:<15}{RESET}"
-    formatted_console = f"{DIM}[{ts}]{RESET} {badge} {message}"
-    formatted_plain = f"[{ts}] {badge_text:<15} {message}"
+    formatted_console = f"{badge} {message}"
+    formatted_plain = f"{badge_text:<15} {message}"
 
     # Print directly to worker stdout
     sys.stdout.write(formatted_console + "\n")
