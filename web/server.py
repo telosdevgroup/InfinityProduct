@@ -247,6 +247,38 @@ class InfinityProductEngine:
             "klasses": connected_klasses
         }
 
+    def get_matching_products(self, klass_slug: str, facet_key: str = None, facet_val: str = None, limit: int = 50):
+        query = {
+            "$or": [
+                {"inferred_klass": klass_slug},
+                {"inferred_klass": unslugify_to_snake(klass_slug)}
+            ]
+        }
+        if facet_key and facet_val:
+            query[f"facet_bag.{facet_key}"] = {"$in": [facet_val, facet_val.title(), facet_val.lower()]}
+
+        prods = list(self.db["source_products"].find(
+            query,
+            {"title": 1, "source_url": 1, "facet_bag": 1, "raw.vendor": 1, "inferred_klass": 1}
+        ).limit(limit))
+
+        results = []
+        for p in prods:
+            results.append({
+                "id": str(p["_id"]),
+                "title": p.get("title", ""),
+                "url": p.get("source_url", ""),
+                "vendor": p.get("raw", {}).get("vendor") or p.get("facet_bag", {}).get("Vendor", ""),
+                "facet_bag": p.get("facet_bag", {})
+            })
+        return {
+            "klass": klass_slug,
+            "facet_key": facet_key,
+            "facet_val": facet_val,
+            "total": len(results),
+            "products": results
+        }
+
 engine = InfinityProductEngine()
 
 class ExplorerHandler(BaseHTTPRequestHandler):
@@ -267,6 +299,13 @@ class ExplorerHandler(BaseHTTPRequestHandler):
         if path == "/api/klasses":
             q = query.get("q", [""])[0]
             self.respond_json(engine.get_klasses_list(query=q))
+            return
+
+        if path.startswith("/api/klass/") and "/products" in path:
+            klass_slug = path.replace("/api/klass/", "").replace("/products", "").strip("/")
+            facet_key = query.get("key", [None])[0]
+            facet_val = query.get("val", [None])[0]
+            self.respond_json(engine.get_matching_products(klass_slug, facet_key, facet_val))
             return
 
         if path.startswith("/api/klass/"):
