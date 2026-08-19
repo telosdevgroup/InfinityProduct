@@ -165,12 +165,24 @@ def action_synthesize_single_klass():
         has_blurb = "✅ Done" if (meta and meta.get("blurb")) else "⏳ Needed"
         print(f"  [{BOLD}{idx}{RESET}] {slug:<26} ({item['count']} prods) [{has_blurb}]")
 
-    print(f"\nEnter a number [1-10] or type a slug directly (e.g. 'foam-dressing'):")
+    print(f"\nEnter a number [1-10], {BOLD}'r'{RESET} for Random Klass, or type a slug directly:")
     user_input = input(f"{BOLD}Klass selection: {RESET}").strip()
     if not user_input:
         return
 
-    if user_input.isdigit() and 1 <= int(user_input) <= len(top_klasses):
+    import random
+    if user_input.lower() in ["r", "rand", "random"]:
+        all_candidates = list(db["source_products"].aggregate([
+            {"$match": {"inferred_klass": {"$nin": [None, "", "unclassified", "medical_supply"]}}},
+            {"$group": {"_id": "$inferred_klass", "count": {"$sum": 1}}},
+            {"$match": {"count": {"$gte": 5}}}
+        ]))
+        unblurbed = [k for k in all_candidates if not db["klass_metadata"].find_one({"_id": slugify(k["_id"]), "blurb": {"$exists": True, "$ne": ""}})]
+        pool = unblurbed if unblurbed else all_candidates
+        picked = random.choice(pool)
+        target_slug = slugify(picked["_id"])
+        print(f"\n{YELLOW}🎲 Randomly picked: {BOLD}{target_slug}{RESET}{YELLOW} ({picked['count']} products){RESET}")
+    elif user_input.isdigit() and 1 <= int(user_input) <= len(top_klasses):
         target_slug = slugify(top_klasses[int(user_input) - 1]["_id"])
     else:
         target_slug = slugify(user_input)
