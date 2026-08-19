@@ -149,35 +149,93 @@ def extract_facetbag_from_raw(title: str, desc: str, vendor: str = None) -> dict
     full_text = f"{title} {desc}".lower()
     facet_bag = {}
 
-    for m in ["nitrile", "vinyl", "latex", "silicone", "foam", "cotton", "gauze", "silver", "alginate", "polyurethane", "stainless steel", "polychloroprene", "rubber"]:
+    # 1. Materials
+    for m in ["nitrile", "vinyl", "latex", "silicone", "foam", "cotton", "gauze", "silver", "alginate", "polyurethane", "stainless steel", "polychloroprene", "rubber", "hydrocolloid", "hydrogel", "collagen", "zinc", "calcium alginate"]:
         if re.search(r"\b" + re.escape(m) + r"\b", full_text):
             facet_bag.setdefault("Material", []).append(m.title())
 
-    for sz in ["X-Small", "Small", "Medium", "Large", "Extra Large", "2XL", "Pediatric", "Adult"]:
+    # 2. Powder Content
+    if "powder-free" in full_text or "powder free" in full_text or "powderfree" in full_text:
+        facet_bag["Powder Content"] = "Powder-Free"
+    elif "powdered" in full_text:
+        facet_bag["Powder Content"] = "Powdered"
+
+    # 3. Grade / Application
+    if "chemo" in full_text or "chemotherapy" in full_text or "usp 800" in full_text:
+        facet_bag["Safety Rating"] = "Chemo Rated"
+    if "exam grade" in full_text or "examination grade" in full_text or "medical grade" in full_text:
+        facet_bag["Grade"] = "Medical Exam Grade"
+    elif "surgical grade" in full_text:
+        facet_bag["Grade"] = "Surgical Grade"
+
+    # 4. Thickness / Gauge
+    mil_match = re.search(r'\b(\d+(?:\.\d+)?)\s*mil\b', full_text)
+    if mil_match:
+        facet_bag["Thickness"] = f"{mil_match.group(1)} mil"
+    elif "heavy duty" in full_text or "high risk" in full_text:
+        facet_bag["Thickness"] = "Heavy Duty"
+
+    # 5. Hand Specificity
+    if "ambidextrous" in full_text:
+        facet_bag["Hand Fitting"] = "Ambidextrous"
+    elif "hand specific" in full_text or "right/left" in full_text:
+        facet_bag["Hand Fitting"] = "Hand-Specific"
+
+    # 6. Sizing
+    for sz in ["X-Small", "Small", "Medium", "Large", "Extra Large", "2XL", "3XL", "Pediatric", "Adult", "Bariatric"]:
         if re.search(r"\b" + re.escape(sz.lower()) + r"\b", full_text):
             facet_bag["Size"] = sz
             break
 
-    for c in ["blue", "pink", "black", "green", "clear", "white", "purple", "yellow"]:
+    # 7. Colors
+    for c in ["blue", "pink", "black", "green", "clear", "white", "purple", "yellow", "teal", "orange"]:
         if re.search(r"\b" + re.escape(c) + r"\b", full_text):
             facet_bag["Color"] = c.title()
             break
 
+    # 8. Sterility
     if "non-sterile" in full_text or "nonsterile" in full_text or "non sterile" in full_text:
         facet_bag["Sterility"] = "Non-Sterile"
     elif "sterile" in full_text:
         facet_bag["Sterility"] = "Sterile"
 
-    for cuff in ["beaded cuff", "extended cuff", "standard cuff", "adhesive border"]:
+    # 9. Cuff Styles
+    for cuff in ["beaded cuff", "extended cuff", "standard cuff", "rolled cuff"]:
         if cuff in full_text:
             facet_bag["Cuff"] = cuff.title()
             break
 
+    # 10. Textures
     for tex in ["textured fingertips", "textured fingers", "fully textured", "micro-textured", "smooth"]:
         if tex in full_text:
             facet_bag["Texture"] = "Textured Fingertips" if "textured finger" in tex else tex.title()
             break
 
+    # 11. Absorbency (Wound care / Incontinence)
+    if "maximum absorbency" in full_text or "ultimate absorbency" in full_text or "super absorbency" in full_text or "heavy absorbency" in full_text:
+        facet_bag["Absorbency"] = "Heavy / Maximum"
+    elif "moderate absorbency" in full_text or "regular absorbency" in full_text:
+        facet_bag["Absorbency"] = "Moderate"
+    elif "light absorbency" in full_text or "ultra thin" in full_text:
+        facet_bag["Absorbency"] = "Light"
+
+    # 12. Adhesion & Border Style (Dressings)
+    if "silicone adhesive" in full_text or "soft silicone" in full_text:
+        facet_bag["Adhesive Type"] = "Soft Silicone"
+    elif "acrylic adhesive" in full_text:
+        facet_bag["Adhesive Type"] = "Acrylic"
+    
+    if "with border" in full_text or "bordered" in full_text or "adhesive border" in full_text:
+        facet_bag["Border Style"] = "Bordered"
+    elif "non-bordered" in full_text or "without border" in full_text or "non bordered" in full_text:
+        facet_bag["Border Style"] = "Non-Bordered"
+
+    # 13. Active Agents / Antimicrobial
+    for ag in ["silver", "honey", "iodine", "cadexomer", "phmb", "chlorhexidine", "bacitracin", "mupirocin", "zinc"]:
+        if re.search(r"\b" + re.escape(ag) + r"\b", full_text):
+            facet_bag.setdefault("Active Agent", []).append(ag.title())
+
+    # 14. Vendor
     if vendor:
         facet_bag["Vendor"] = vendor
 
