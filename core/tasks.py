@@ -655,8 +655,7 @@ Examples:
         }
     )
 
-    factory_log("KLASS", f"\"{title}\"")
-    factory_log("KLASS", f"-> inferred: {inferred_klass}")
+    factory_log("KLASS", f"\"{title}\" -> {inferred_klass}")
     factory_log("DONE", f"product={url} complete", blank_after=True)
 
     # Record discovered Klass metadata without triggering blurb generation

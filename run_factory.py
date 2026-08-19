@@ -72,11 +72,14 @@ def shutdown(sig=None, frame=None):
     os._exit(0)
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
     print("===============================================================================", flush=True)
-    print(" 🏭 INFINITYPRODUCT INDUSTRIAL FACTORY FLOOR -- 24/7 RUNTIME SUPERVISOR", flush=True)
+    print(" [*] INFINITYPRODUCT INDUSTRIAL FACTORY FLOOR -- 24/7 RUNTIME SUPERVISOR", flush=True)
     print("===============================================================================", flush=True)
     print(" Spawning 4 independent station worker scripts:", flush=True)
     for w in WORKERS:
