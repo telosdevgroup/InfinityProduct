@@ -149,59 +149,35 @@ def action_enqueue_missing():
         print(f"{GREEN}[OK] All discovered products are already ingested.{RESET}")
     time.sleep(1.2)
 
-def action_synthesize_top_blurbs():
+def action_synthesize_single_klass():
     db = get_db()
-    min_count = 5
     pipeline = [
         {"$match": {"inferred_klass": {"$nin": [None, "", "unclassified", "medical_supply"]}}},
         {"$group": {"_id": "$inferred_klass", "count": {"$sum": 1}}},
-        {"$match": {"count": {"$gte": min_count}}},
-        {"$sort": {"count": -1}}
+        {"$sort": {"count": -1}},
+        {"$limit": 10}
     ]
     top_klasses = list(db["source_products"].aggregate(pipeline))
-    print(f"\nFound {len(top_klasses)} Klasses with >= {min_count} products.")
-    for item in top_klasses:
+    print(f"\n{BOLD}{CYAN}Top Available Klasses:{RESET}")
+    for idx, item in enumerate(top_klasses, 1):
         slug = slugify(item["_id"])
-        generate_klass_blurb.delay(slug)
-        print(f"  -> enqueued Klass Blurb: {slug} ({item['count']} prods)")
-    print(f"{GREEN}[OK] Dispatched {len(top_klasses)} Klass Blurb tasks to 'klass_blurb_q'.{RESET}")
-    time.sleep(1.5)
+        meta = db["klass_metadata"].find_one({"_id": slug})
+        has_blurb = "✅ Done" if (meta and meta.get("blurb")) else "⏳ Needed"
+        print(f"  [{BOLD}{idx}{RESET}] {slug:<26} ({item['count']} prods) [{has_blurb}]")
 
-def action_synthesize_facet_blurbs():
-    db = get_db()
-    from core.tasks import generate_facet_value_blurb
-    from web.server import engine
-    min_count = 5
-    pipeline = [
-        {"$match": {"inferred_klass": {"$nin": [None, "", "unclassified", "medical_supply"]}}},
-        {"$group": {"_id": "$inferred_klass", "count": {"$sum": 1}}},
-        {"$match": {"count": {"$gte": min_count}}},
-        {"$sort": {"count": -1}}
-    ]
-    top_klasses = list(db["source_products"].aggregate(pipeline))
-    print(f"\nEnqueueing contextual Facet-Value blurbs for top {len(top_klasses)} Klasses...")
-    total_enqueued = 0
-    for item in top_klasses:
-        slug = slugify(item["_id"])
-        data = engine.get_klass_facetbag(slug)
-        if not data.get("blurb"):
-            print(f"  [SKIPPED] {slug:<22} (No Klass Blurb present yet)")
-            continue
+    print(f"\nEnter a number [1-10] or type a slug directly (e.g. 'foam-dressing'):")
+    user_input = input(f"{BOLD}Klass selection: {RESET}").strip()
+    if not user_input:
+        return
 
-        EXCLUDED_KEYS = {"color", "size", "vendor", "quantity", "pack", "count", "weight", "volume", "dimension"}
-        for g in data.get("facet_groups", [])[:4]:
-            key = g.get("label") or g.get("key")
-            if key.lower() in EXCLUDED_KEYS:
-                continue
-            for v in g.get("values", [])[:6]:
-                val = v.get("value")
-                cnt = v.get("count", 0)
-                pct = v.get("percentage", 0)
-                # Guardrail: Only meaningful observations (count >= 3 or percentage >= 5%)
-                if val and (cnt >= 3 or pct >= 5.0):
-                    generate_facet_value_blurb.delay(slug, key, str(val))
-                    total_enqueued += 1
-    print(f"{GREEN}[OK] Dispatched {total_enqueued} Facet-Value blurb tasks to 'facet_blurb_q'.{RESET}")
+    if user_input.isdigit() and 1 <= int(user_input) <= len(top_klasses):
+        target_slug = slugify(top_klasses[int(user_input) - 1]["_id"])
+    else:
+        target_slug = slugify(user_input)
+
+    print(f"\n{GREEN}[OK] Enqueued ONE Klass: '{target_slug}' into 'klass_blurb_q'!{RESET}")
+    print(f"{DIM}Station 4 will synthesize its overview, then auto-cascade its clinical facets into 'facet_blurb_q'.{RESET}")
+    generate_klass_blurb.delay(target_slug)
     time.sleep(1.5)
 
 def action_clear_log():
@@ -229,13 +205,12 @@ def main():
             print(f" [{BOLD}1{RESET}] 📺 {BOLD}Resume Live Log Stream{RESET}")
             print(f" [{BOLD}2{RESET}] 🔍 {BOLD}Trigger Sitemap Discovery{RESET} (Station 1)")
             print(f" [{BOLD}3{RESET}] 🚀 {BOLD}Enqueue Remaining Products{RESET} (Station 2)")
-            print(f" [{BOLD}4{RESET}] ✍️  {BOLD}Queue Top Klasses for Blurb (Auto-Cascades into Facet Queue){RESET}")
-            print(f" [{BOLD}5{RESET}] 🧬 {BOLD}Queue Standalone Facet Blurbs for Top Klasses{RESET}")
-            print(f" [{BOLD}6{RESET}] 🧹 {BOLD}Clear Log Screen / Reset Log File{RESET}")
+            print(f" [{BOLD}4{RESET}] 🎯 {BOLD}Queue ONE Specific Klass (Auto-Cascades Facet Blurbs){RESET}")
+            print(f" [{BOLD}5{RESET}] 🧹 {BOLD}Clear Log Screen / Reset Log File{RESET}")
             print(f" [{BOLD}0{RESET}] 🚪 {BOLD}Exit to Shell{RESET}")
             print(f"{BOLD}{CYAN}==============================================================================={RESET}")
 
-            choice = input(f"{BOLD}Select an action [1-6, 0 to exit]: {RESET}").strip()
+            choice = input(f"{BOLD}Select an action [1-5, 0 to exit]: {RESET}").strip()
 
             if choice == "1" or choice == "":
                 continue
@@ -244,10 +219,8 @@ def main():
             elif choice == "3":
                 action_enqueue_missing()
             elif choice == "4":
-                action_synthesize_top_blurbs()
+                action_synthesize_single_klass()
             elif choice == "5":
-                action_synthesize_facet_blurbs()
-            elif choice == "6":
                 action_clear_log()
             elif choice in ["0", "q", "exit", "quit"]:
                 print(f"\n{GREEN}Exiting Factory Console.{RESET}\n")
