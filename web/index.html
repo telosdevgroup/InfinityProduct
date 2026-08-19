@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InfinityProduct | Facet Graph Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #090d16;
+      --bg-card: #131b2e;
+      --bg-card-hover: #1c2742;
+      --bg-panel: #0d1322;
+      --border: #1e293b;
+      --border-bright: #334155;
+      
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      
+      --accent-cyan: #38bdf8;
+      --accent-indigo: #818cf8;
+      --accent-purple: #c084fc;
+      --accent-emerald: #34d399;
+      --accent-amber: #fbbf24;
+      --accent-rose: #fb7185;
+
+      --glow-cyan: rgba(56, 189, 248, 0.15);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+
+    /* Sleek Scrollbars */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: var(--bg-dark);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-bright);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--text-dim);
+    }
+
+    header {
+      height: 60px;
+      background: rgba(13, 19, 34, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      flex-shrink: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--text-main);
+      text-decoration: none;
+    }
+
+    .brand-badge {
+      font-size: 0.65rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-indigo));
+      color: #000;
+      padding: 2px 8px;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .global-stats {
+      display: flex;
+      gap: 16px;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .stat-pill {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      padding: 4px 12px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .stat-pill strong {
+      color: var(--text-main);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .app-layout {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      flex: 1;
+      height: calc(100vh - 60px);
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      background: var(--bg-panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .search-box {
+      position: relative;
+    }
+
+    .search-box input {
+      width: 100%;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      padding: 9px 12px 9px 34px;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      outline: none;
+      transition: all 0.2s;
+    }
+
+    .search-box input:focus {
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 0 2px var(--glow-cyan);
+    }
+
+    .search-box svg {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-dim);
+    }
+
+    .sidebar-list {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+      padding: 8px;
+    }
+
+    .sidebar-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 12px;
+      margin-bottom: 2px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.88rem;
+    }
+
+    .sidebar-item:hover {
+      background: var(--bg-card);
+      color: var(--text-main);
+    }
+
+    .sidebar-item.active {
+      background: var(--bg-card-hover);
+      color: var(--accent-cyan);
+      border-left: 3px solid var(--accent-cyan);
+      font-weight: 600;
+    }
+
+    .item-count {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--text-dim);
+    }
+
+    .sidebar-item.active .item-count {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent-cyan);
+    }
+
+    /* Main Workspace */
+    .workspace {
+      height: 100%;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 32px 40px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* Hero Container */
+    .hero-card {
+      background: linear-gradient(145deg, #131b2e 0%, #0d1322 100%);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    }
+
+    .hero-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .entity-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 4px 10px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent-cyan);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+
+    .entity-tag.facet-tag {
+      background: rgba(192, 132, 252, 0.15);
+      color: var(--accent-purple);
+      border-color: rgba(192, 132, 252, 0.3);
+    }
+
+    .wiki-entity-link {
+      color: #d8b4fe;
+      text-decoration: underline;
+      text-decoration-color: rgba(192, 132, 252, 0.4);
+      text-underline-offset: 3px;
+      font-weight: 600;
+      padding: 1px 5px;
+      border-radius: 4px;
+      transition: all 0.15s ease;
+      cursor: pointer;
+    }
+    .wiki-entity-link:hover {
+      background: rgba(192, 132, 252, 0.2);
+      color: #fff;
+      text-decoration-color: var(--accent-purple);
+    }
+
+    .hero-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 2.2rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--text-main);
+    }
+
+    .hero-subtitle {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .hero-counter {
+      text-align: right;
+    }
+
+    .hero-counter .num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 2.2rem;
+      font-weight: 800;
+      color: var(--accent-emerald);
+    }
+
+    .hero-counter .label {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Dynamic Facet Bag Section */
+    .facet-bag-section {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .facet-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+    }
+
+    .facet-label {
+      min-width: 150px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding-top: 6px;
+    }
+
+    .facet-pill-cloud {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      flex: 1;
+    }
+
+    .facet-pill {
+      background: var(--bg-card);
+      border: 1px solid var(--border-bright);
+      color: var(--text-main);
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      text-decoration: none;
+      user-select: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .facet-pill:hover {
+      border-color: var(--accent-purple);
+      color: var(--accent-purple);
+      background: rgba(192, 132, 252, 0.1);
+      transform: translateY(-1px);
+    }
+
+    .facet-pill .p-count {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--accent-cyan);
+      background: rgba(56, 189, 248, 0.12);
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+
+    /* Inverted Facet Connected Klasses Grid */
+    .connected-klasses-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .klass-graph-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      text-decoration: none;
+      color: var(--text-main);
+      transition: all 0.15s ease;
+    }
+
+    .klass-graph-card:hover {
+      border-color: var(--accent-cyan);
+      background: var(--bg-card-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+    }
+
+    .klass-graph-card .k-title {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .klass-graph-card .k-count {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--accent-emerald);
+      background: rgba(52, 211, 153, 0.12);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+
+    /* Loader */
+    .loader {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 60px;
+      color: var(--text-muted);
+      font-size: 1rem;
+      gap: 12px;
+    }
+
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent-cyan);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+  <header>
+    <a href="/klass/exam-glove" class="brand" onclick="navigateTo('/klass/exam-glove', event)">
+      <span>INFINITYPRODUCT</span>
+      <span class="brand-badge">Facet Graph Matrix</span>
+    </a>
+    <div class="global-stats" id="globalStats">
+      <div class="stat-pill">Klasses: <strong id="statKlasses">-</strong></div>
+      <div class="stat-pill">Total Products: <strong id="statProducts">-</strong></div>
+    </div>
+  </header>
+
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="search-box">
+          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+          </svg>
+          <input type="text" id="searchInput" placeholder="Search klasses..." oninput="handleSearch(this.value)">
+        </div>
+      </div>
+
+      <div class="sidebar-list" id="sidebarList">
+        <div class="loader"><div class="spinner"></div> Loading...</div>
+      </div>
+    </aside>
+
+    <main class="workspace" id="workspace">
+      <div id="pivotContainer">
+        <div class="loader"><div class="spinner"></div> Navigating Graph...</div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const appState = {
+      currentPath: null,
+      allKlasses: []
+    };
+
+    async function init() {
+      await loadGlobalStats();
+      await loadKlassesList();
+
+      handleRoute(window.location.pathname);
+      window.addEventListener('popstate', () => handleRoute(window.location.pathname));
+    }
+
+    function handleRoute(pathname) {
+      if (!pathname || pathname === '/' || pathname === '') {
+        if (appState.allKlasses.length > 0) {
+          navigateTo(`/klass/${appState.allKlasses[0].slug}`);
+        }
+        return;
+      }
+
+      appState.currentPath = pathname;
+
+      if (pathname.startsWith('/klass/')) {
+        const slug = pathname.slice(7);
+        renderKlassView(slug);
+      } else if (pathname.startsWith('/facet/')) {
+        const facetPath = pathname.slice(7);
+        renderFacetInversionView(facetPath);
+      }
+    }
+
+    function navigateTo(url, event) {
+      if (event) event.preventDefault();
+      window.history.pushState({}, '', url);
+      handleRoute(url);
+    }
+
+    async function loadGlobalStats() {
+      try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+        document.getElementById('statProducts').textContent = data.classified_products.toLocaleString();
+        document.getElementById('statKlasses').textContent = data.unique_klasses.toLocaleString();
+      } catch (err) {
+        console.error('Stats error:', err);
+      }
+    }
+
+    async function loadKlassesList(query = '') {
+      try {
+        const res = await fetch(`/api/klasses?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        appState.allKlasses = data.items;
+        renderSidebar();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function renderSidebar() {
+      const listEl = document.getElementById('sidebarList');
+      listEl.innerHTML = '';
+
+      appState.allKlasses.forEach(k => {
+        const item = document.createElement('a');
+        item.href = `/klass/${k.slug}`;
+        const isCurrent = appState.currentPath === `/klass/${k.slug}`;
+        item.className = `sidebar-item ${isCurrent ? 'active' : ''}`;
+        item.innerHTML = `
+          <span>${k.title}</span>
+          <span class="item-count">${k.count}</span>
+        `;
+        item.onclick = (e) => navigateTo(`/klass/${k.slug}`, e);
+        listEl.appendChild(item);
+      });
+    }
+
+    let searchTimer = null;
+    function handleSearch(val) {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        loadKlassesList(val);
+      }, 150);
+    }
+
+    async function triggerKlassBlurb(klassSlug) {
+      try {
+        const res = await fetch(`/api/klass/${klassSlug}/generate_blurb`, { method: 'POST' });
+        const data = await res.json();
+        alert(`Queued Klass Blurb synthesis to klass_blurb_q for ${klassSlug}!`);
+      } catch (err) {
+        alert(`Error queueing blurb: ${err.message}`);
+      }
+    }
+
+    async function triggerFacetBlurbs(klassSlug) {
+      try {
+        const res = await fetch(`/api/klass/${klassSlug}/generate_facet_blurbs`, { method: 'POST' });
+        const data = await res.json();
+        alert(`Queued ${data.count || 0} Facet Value Blurbs to facet_blurb_q for ${klassSlug}!`);
+      } catch (err) {
+        alert(`Error queueing facet blurbs: ${err.message}`);
+      }
+    }
+
+    async function renderKlassView(klassSlug) {
+      renderSidebar();
+      const container = document.getElementById('pivotContainer');
+      container.innerHTML = `<div class="loader"><div class="spinner"></div> Aggregating Klass FacetBag for ${klassSlug}...</div>`;
+
+      try {
+        const res = await fetch(`/api/klass/${klassSlug}`);
+        const data = await res.json();
+        if (data.error) {
+          container.innerHTML = `<div style="color: var(--accent-rose);">${data.error}</div>`;
+          return;
+        }
+
+        const groups = data.facet_groups || [];
+        let facetRowsHtml = '';
+
+        if (groups.length === 0) {
+          facetRowsHtml = `
+            <div style="color: var(--text-dim); padding: 24px 0; font-size: 0.95rem;">
+              No FacetBag data populated for products in this Klass yet.
+            </div>
+          `;
+        } else {
+          facetRowsHtml = groups.map(g => `
+            <div class="facet-row">
+              <div class="facet-label">${g.label || g.key}</div>
+              <div class="facet-pill-cloud">
+                ${g.values.map(v => {
+                  const hasBlurb = Boolean(v.blurb);
+                  const tooltipText = v.blurb ? `${v.value} (${g.label}): ${v.blurb}` : `Pivot to all Klasses sharing ${g.label}: ${v.value}`;
+                  return `
+                    <div style="display: inline-flex; flex-direction: column; gap: 4px;">
+                      <a href="/facet/${g.slug}/${v.slug}" class="facet-pill ${hasBlurb ? 'has-blurb' : ''}" onclick="navigateTo('/facet/${g.slug}/${v.slug}', event)" title="${tooltipText}">
+                        <span>${v.value}</span>
+                        ${hasBlurb ? `<span style="font-size: 0.7rem; color: var(--accent-amber);" title="${v.blurb}">🧬</span>` : ''}
+                        <span class="p-count">${v.count}</span>
+                      </a>
+                      ${hasBlurb ? `<div style="font-size: 0.72rem; color: var(--text-dim); max-width: 280px; line-height: 1.35; padding: 2px 6px; background: rgba(255,255,255,0.02); border-radius: 4px; border-left: 2px solid var(--accent-amber);">${v.blurb}</div>` : ''}
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          `).join('');
+        }
+
+        let blurbHtml = '';
+        if (data.blurb) {
+          // Single-pass Wikipedia-style entity linker (prevents nested tag corruption)
+          const entityMap = new Map();
+          (data.facet_groups || []).forEach(g => {
+            (g.values || []).forEach(v => {
+              if (v.value && v.value.length > 2) {
+                const lower = v.value.toLowerCase();
+                if (!entityMap.has(lower)) {
+                  entityMap.set(lower, `/facet/${g.slug}/${v.slug}`);
+                }
+              }
+            });
+          });
+
+          const keys = Array.from(entityMap.keys()).sort((a, b) => b.length - a.length);
+          let enrichedBlurb = data.blurb;
+
+          if (keys.length > 0) {
+            const pattern = new RegExp(`\\b(${keys.map(k => k.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')).join('|')})\\b`, 'gi');
+            enrichedBlurb = enrichedBlurb.replace(pattern, (match) => {
+              const url = entityMap.get(match.toLowerCase());
+              if (!url) return match;
+              return `<a href="${url}" class="wiki-entity-link" onclick="navigateTo('${url}', event)">${match}</a>`;
+            });
+          }
+
+          blurbHtml = `
+            <div style="margin-top: 14px; padding: 16px 20px; background: rgba(56, 189, 248, 0.04); border-left: 3px solid var(--accent-cyan); border-radius: 8px; font-size: 0.94rem; line-height: 1.65; color: var(--text-main);">
+              <div style="font-size: 0.72rem; font-weight: 700; color: var(--accent-cyan); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                <span>✨ Empirical Facet Intelligence</span>
+              </div>
+              <div class="blurb-text">${enrichedBlurb}</div>
+            </div>
+          `;
+        }
+
+        container.innerHTML = `
+          <div class="hero-card">
+            <div class="hero-header" style="margin-bottom: 16px; padding-bottom: 16px;">
+              <div>
+                <div class="entity-tag">📦 Canonical Klass</div>
+                <h1 class="hero-title">${data.title}</h1>
+                <div class="hero-subtitle">${data.klass}</div>
+              </div>
+              <div style="display: flex; gap: 12px; align-items: center;">
+                <button class="btn btn-secondary" onclick="triggerKlassBlurb('${data.slug}')" style="font-size: 0.8rem; padding: 8px 12px;">✨ Synthesize Blurb</button>
+                <button class="btn btn-secondary" onclick="triggerFacetBlurbs('${data.slug}')" style="font-size: 0.8rem; padding: 8px 12px;">🧬 Synthesize Facet Guidance</button>
+                <div class="hero-counter">
+                  <div class="num">${data.total_items}</div>
+                  <div class="label">Products in Klass</div>
+                </div>
+              </div>
+            </div>
+
+            ${blurbHtml}
+
+            <!-- Dynamic Coverage-Ranked FacetBag Matrix -->
+            <div class="facet-bag-section" style="margin-top: 24px;">
+              ${facetRowsHtml}
+            </div>
+          </div>
+        `;
+      } catch (err) {
+        container.innerHTML = `<div style="color: var(--accent-rose);">Error: ${err.message}</div>`;
+      }
+    }
+
+    async function renderFacetInversionView(facetPath) {
+      renderSidebar();
+      const container = document.getElementById('pivotContainer');
+      container.innerHTML = `<div class="loader"><div class="spinner"></div> Pivoting Graph to Facet Node...</div>`;
+
+      try {
+        const res = await fetch(`/api/facet/${facetPath}`);
+        const data = await res.json();
+        if (data.error) {
+          container.innerHTML = `<div style="color: var(--accent-rose);">${data.error}</div>`;
+          return;
+        }
+
+        const klasses = data.klasses || [];
+        let klassesHtml = '';
+
+        if (klasses.length === 0) {
+          klassesHtml = `
+            <div style="color: var(--text-dim); padding: 24px 0; font-size: 0.95rem;">
+              No connected Klasses found for this facet value.
+            </div>
+          `;
+        } else {
+          klassesHtml = `
+            <div class="connected-klasses-grid">
+              ${klasses.map(k => `
+                <a href="/klass/${k.slug}" class="klass-graph-card" onclick="navigateTo('/klass/${k.slug}', event)">
+                  <span class="k-title">${k.title}</span>
+                  <span class="k-count">${k.count} products</span>
+                </a>
+              `).join('')}
+            </div>
+          `;
+        }
+
+        container.innerHTML = `
+          <div class="hero-card">
+            <div class="hero-header">
+              <div>
+                <div class="entity-tag facet-tag">💠 Inverted Facet Node (${data.facet_key || 'Facet'})</div>
+                <h1 class="hero-title">${data.facet_value}</h1>
+                <div class="hero-subtitle">${data.facet_key_slug ? `${data.facet_key_slug} : ${data.facet_value_slug}` : data.facet_value_slug}</div>
+              </div>
+              <div class="hero-counter">
+                <div class="num">${data.connected_klasses_count}</div>
+                <div class="label">Connected Klasses (${data.total_products} products)</div>
+              </div>
+            </div>
+
+            <div style="margin-top: 16px;">
+              <div style="font-size: 0.85rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px;">
+                Observed on Klasses:
+              </div>
+              ${klassesHtml}
+            </div>
+          </div>
+        `;
+      } catch (err) {
+        container.innerHTML = `<div style="color: var(--accent-rose);">Error: ${err.message}</div>`;
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
