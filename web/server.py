@@ -342,10 +342,23 @@ class ExplorerHandler(BaseHTTPRequestHandler):
         self.send_error(404, "Not found")
 
     def serve_file(self, filename, content_type):
-        filepath = os.path.join(os.path.dirname(__file__), filename)
-        if not os.path.exists(filepath):
-            self.send_error(404, "File not found")
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            os.path.join(base_dir, filename),
+            os.path.join(base_dir, "web", filename),
+            os.path.join(os.getcwd(), "web", filename),
+            os.path.join(os.getcwd(), filename),
+        ]
+        filepath = None
+        for c in candidates:
+            if os.path.exists(c):
+                filepath = c
+                break
+
+        if not filepath:
+            self.send_error(404, f"File not found: {filename}")
             return
+
         with open(filepath, "rb") as f:
             content = f.read()
         self.send_response(200)
