@@ -607,38 +607,48 @@ def infer_klass(self, url: str):
         return {"error": "Product not found"}
 
     title = product.get("title", "")
-    title_lower = title.lower()
+    ptype = product.get("product_type", "")
+    vendor = product.get("vendor", "")
+    tags = product.get("tags", [])
+    raw = product.get("raw", {})
+    body = raw.get("body_html", "") or ""
+    clean_body = re.sub(r'<[^>]+>', ' ', body).strip()
+    clean_body = re.sub(r'\s+', ' ', clean_body)[:300]
+    
     inferred_klass = None
 
     # ==========================================================================
-    # STATION 3: LLM TAXONOMIC CLASSIFICATION (Granite 4.1:8B)
+    # STATION 3: LLM TAXONOMIC CLASSIFICATION (Granite 4.1:8B + Full Shopify Context)
     # ==========================================================================
-    system_prompt = """You are a medical product classification system. Your task is to identify the core physical product type (noun phrase in singular snake_case).
+    system_prompt = """You are an expert healthcare product taxonomy classifier.
+Your task is to classify medical and clinical products into a clean, standardized canonical product category (2 to 3 words, singular snake_case).
 
-Instructions:
-- Look at the actual physical object being sold (e.g. solution, glove, dressing, catheter, needle, sponge, drape, mask, tubing, tape, scrub, container, underpad).
-- Remove all brand names (McKesson, 3M, BD, Curity, Ansell) and sizes/dimensions (16 oz, 4x4, Small, 21G).
-- Output ONLY the single lowercase snake_case term with no extra text or punctuation.
+CRITICAL TAXONOMY RULES:
+1. Output a 2 to 3 word qualified noun phrase (e.g. glucose_test_strip, diagnostic_wall_system, exam_table_paper, instrument_tray, hypodermic_needle, vital_signs_monitor, exam_glove).
+2. DO NOT output single generic words (NEVER output: gel, paper, tray, bag, pump, lock, rack, device, system, pad, part).
+3. DO NOT output 5-word attribute descriptions (NEVER include: sterile, non-sterile, luer_slip, reusable, 4x4, 100_pack, blue, extra_large). Put attributes aside; identify only the CORE CLINICAL PRODUCT NOUN.
+4. Use the Shopify Category hierarchy, Vendor, and Product Description to ground the true product type.
+5. Output ONLY the single snake_case category term."""
 
-Examples:
-- "BD Eclipse Hypodermic Needle with Safety Cover 21G" -> hypodermic_needle
-- "3M Tegaderm Transparent Film Dressing 4x4" -> transparent_film_dressing
-- "Betadine Povidone-Iodine Antiseptic Solution 8 oz" -> antiseptic_solution
-- "McKesson Microbicide Antiseptic PVP Scrub Solution" -> antiseptic_scrub_solution
-- "Halyard Purple Nitrile Exam Gloves Medium" -> exam_glove
-- "ComfortFoam Border Lite Silicone Adhesive Foam Dressing" -> foam_dressing"""
+    user_prompt = f"""PRODUCT DETAILS:
+Title: {title}
+Category: {ptype}
+Vendor: {vendor}
+Tags: {', '.join(tags) if isinstance(tags, list) else tags}
+Description: {clean_body}
 
-    inferred_klass = None
+Canonical Product Category:"""
+
     try:
         resp = requests.post(
             f"{OLLAMA_HOST}/api/generate",
             json={
                 "model": OLLAMA_MODEL,
                 "system": system_prompt,
-                "prompt": f"Product: {title}\nClassification:",
+                "prompt": user_prompt,
                 "options": {
                     "temperature": 0.0,
-                    "num_predict": 10,
+                    "num_predict": 15,
                     "num_ctx": 2048
                 },
                 "keep_alive": "1h",
