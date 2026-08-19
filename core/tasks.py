@@ -627,12 +627,13 @@ def generate_klass_blurb(self, klass_slug: str):
 
     # Use the engine's dynamic facet extraction across all available products
     from web.server import engine
-    klass_data = engine.get_klass_facetbag(klass_slug)
-
+    EXCLUDED_PROMPT_GROUPS = {"vendor", "brand", "manufacturer", "distributor"}
     variant_axes = {}
     if klass_data and "facet_groups" in klass_data:
-        for g in klass_data["facet_groups"][:6]:
+        for g in klass_data["facet_groups"]:
             label = g.get("label") or g.get("key")
+            if label.lower() in EXCLUDED_PROMPT_GROUPS:
+                continue
             vals = [v.get("value") for v in g.get("values", [])[:5] if v.get("value")]
             if vals:
                 variant_axes[label] = vals
@@ -644,20 +645,13 @@ def generate_klass_blurb(self, klass_slug: str):
 
     factory_log("BLURB", f"context: {len(dim_keys)} dimensions ({', '.join(dim_keys[:5])})")
 
-    system_prompt = """You are an encyclopedia editor writing a short, neutral, Wikipedia-style overview of a product Klass using aggregated product data as evidence.
+    system_prompt = """You are an encyclopedia editor writing a short, neutral, Wikipedia-style clinical overview of a medical product Klass using clinical taxonomy evidence.
 
 Guidelines:
+- Do not mention specific store vendors, brand names, or distributors. Focus entirely on clinical purpose, medical indications, materials, active agents, and functional mechanisms.
 - Do not mechanically enumerate facet groups. The FacetBag is source material, not an outline.
 - Describe what the product class is, what it is generally used for, and mention only a few characteristics that are genuinely useful for understanding the class. Vary sentence structure naturally between Klasses.
-- Do not use phrases such as:
-  “are available in various”
-  “exhibit variability in”
-  “designed to”
-  “primarily acts as”
-  “is a type of”
-  unless they happen to be the most natural wording.
-- Do not attempt to mention every facet or every common value. The facet matrix below the description already does that.
-- The result should read like a human-written introductory paragraph in an encyclopedia, not a generated summary of database fields.
+- Do not use filler phrases such as “are available in various”, “exhibit variability in”, or “primarily acts as”.
 - Target roughly 2–4 sentences. Output raw paragraph text directly with zero introductory remarks."""
 
     user_prompt = f"""Product Class: {plural_name}
