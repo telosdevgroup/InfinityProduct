@@ -649,13 +649,12 @@ def generate_klass_blurb(self, klass_slug: str):
 
     factory_log("BLURB", f"context: {len(dim_keys)} dimensions ({', '.join(dim_keys[:5])})")
 
-    system_prompt = """You are an encyclopedia editor writing a short, neutral, Wikipedia-style clinical overview of a medical product Klass using clinical taxonomy evidence.
+    system_prompt = """You are an encyclopedia editor writing a short, clear, Wikipedia-style overview of a medical product Klass.
 
 Guidelines:
-- Do not mention specific store vendors, brand names, or distributors. Focus entirely on clinical purpose, medical indications, materials, active agents, and functional mechanisms.
-- Do not mechanically enumerate facet groups. The FacetBag is source material, not an outline.
-- Describe what the product class is, what it is generally used for, and mention only a few characteristics that are genuinely useful for understanding the class. Vary sentence structure naturally between Klasses.
-- Do not use filler phrases such as “are available in various”, “exhibit variability in”, or “primarily acts as”.
+- Write in plain, accessible, authoritative clinical English. Avoid dense latin medical jargon (e.g. use "allows the wound to naturally clear dead tissue while preventing skin breakdown" instead of "autolytic debridement" or "maceration").
+- Do not mention specific store vendors, brand names, or distributors. Focus on practical clinical purpose, common medical indications, key materials, and how the product protects patients.
+- Do not mechanically enumerate facet groups. The FacetBag is evidence, not an outline.
 - Target roughly 2–4 sentences. Output raw paragraph text directly with zero introductory remarks."""
 
     user_prompt = f"""Product Class: {plural_name}
@@ -760,12 +759,13 @@ def generate_facet_value_blurb(self, klass_slug: str, facet_key: str, facet_val:
     klass_blurb = meta.get("blurb", "")
     factory_log("FACET", f"[{klass_title}] {facet_key}: \"{facet_val}\"...")
 
-    system_prompt = """You are a technical medical device encyclopedia writer. Write a concise, direct, 1-2 sentence clinical explanation of the specific facet value in the context of the product Klass.
+    system_prompt = """You are a technical medical product specialist. Write a concise, direct, 1-2 sentence explanation of the specific facet value in the context of the product Klass.
 Rules:
-1. Start directly with the subject (e.g. "Nitrile provides...", "Latex offers...", "Vinyl is...").
-2. DO NOT use conversational fluff, filler, or phrases like "A healthcare clinician selects", "Clinicians choose", "Chosen by clinicians", or "In clinical settings".
-3. Focus directly on material properties, barrier performance, tactile sensitivity, allergy considerations, and practical trade-offs.
-4. Output ONLY the raw 1-2 sentences with zero preamble."""
+1. Start directly with the subject (e.g. "Nitrile provides...", "Latex offers...", "Silicone is...", "Sterile options are...").
+2. Write in plain, clear, accessible English. Avoid dense latin medical jargon (e.g. avoid unexplained terms like "autolytic debridement" or "maceration").
+3. DO NOT use conversational fluff, robotic preamble, or phrases like "A healthcare clinician selects" or "Clinicians choose".
+4. Focus directly on physical properties, barrier protection, patient comfort, skin sensitivity, and practical clinical advantages.
+5. Output ONLY the raw 1-2 sentences with zero preamble."""
 
     user_prompt = f"""Product Class: {klass_title}
 Class Overview: {klass_blurb if klass_blurb else klass_title}
