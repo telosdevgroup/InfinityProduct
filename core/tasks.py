@@ -630,6 +630,7 @@ def generate_klass_blurb(self, klass_slug: str):
 
     # Use the engine's dynamic facet extraction across all available products
     from web.server import engine
+    klass_data = engine.get_klass_facetbag(klass_slug)
     EXCLUDED_PROMPT_GROUPS = {"vendor", "brand", "manufacturer", "distributor"}
     variant_axes = {}
     if klass_data and "facet_groups" in klass_data:
